@@ -1,17 +1,539 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
-import '../../../core/widgets/placeholder_screen.dart';
+import '../../../core/widgets/gradient_background.dart';
+import '../../auth/presentation/auth_providers.dart';
+import '../domain/room.dart';
+import '../domain/room_code.dart';
+import '../domain/room_failure.dart';
+import '../domain/room_member.dart';
+import '../domain/room_name.dart';
+import 'room_not_available.dart';
+import 'rooms_providers.dart';
 
-class RoomScreen extends StatelessWidget {
+class RoomScreen extends ConsumerStatefulWidget {
   const RoomScreen({super.key, required this.id});
 
   final String id;
 
   @override
+  ConsumerState<RoomScreen> createState() => _RoomScreenState();
+}
+
+class _RoomScreenState extends ConsumerState<RoomScreen> {
+  /// True while leaving or closing: the room disappears for me the moment my
+  /// membership row is gone, and that must not flash as "not found".
+  bool _leaving = false;
+
+  Future<void> _confirmLeave(Room room, {required bool isHost}) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(isHost ? 'Close room?' : 'Leave room?'),
+        content: Text(
+          isHost
+              ? 'The room closes for everyone and its code stops working.'
+              : 'You can rejoin later with the room code.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(isHost ? 'Close room' : 'Leave room'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final container = ProviderScope.containerOf(context, listen: false);
+    final repo = container.read(roomRepositoryProvider);
+    final router = GoRouter.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _leaving = true);
+    try {
+      if (isHost) {
+        await repo.closeRoom(room.id);
+      } else {
+        await repo.leaveRoom(room.id);
+      }
+      container.invalidate(myRoomsProvider);
+      router.go('/home');
+    } on RoomFailure catch (failure) {
+      if (mounted) setState(() => _leaving = false);
+      messenger.showSnackBar(SnackBar(content: Text(failure.message)));
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return PlaceholderScreen(
-      route: '/room/$id',
-      links: const [PlaceholderLink('Back to home', '/home')],
+    if (_leaving) {
+      return const GradientBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+
+    // The id comes from the URL: never let a malformed one reach a query or a
+    // realtime filter.
+    if (!isPlausibleRoomId(widget.id)) {
+      return const RoomNotAvailable(
+        title: 'Room not found',
+        message: "This room doesn't exist, or you're not in it.",
+      );
+    }
+
+    final room = ref.watch(roomProvider(widget.id));
+    return room.when(
+      skipLoadingOnRefresh: true,
+      loading: () => const GradientBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Center(child: CircularProgressIndicator()),
+        ),
+      ),
+      error: (error, _) => RoomNotAvailable(
+        title: "Can't open this room",
+        message: error is RoomFailure
+            ? error.message
+            : const RoomFailure(RoomFailureKind.unknown).message,
+      ),
+      data: (value) {
+        if (value == null) {
+          return const RoomNotAvailable(
+            title: 'Room not found',
+            message: "This room doesn't exist, or you're not in it.",
+          );
+        }
+        if (value.closedAt != null) {
+          return RoomNotAvailable(
+            title: 'Room closed',
+            message: const RoomFailure(RoomFailureKind.closed).message,
+          );
+        }
+        return _RoomView(room: value, onLeave: _confirmLeave);
+      },
+    );
+  }
+}
+
+class _RoomView extends ConsumerWidget {
+  const _RoomView({required this.room, required this.onLeave});
+
+  final Room room;
+  final Future<void> Function(Room room, {required bool isHost}) onLeave;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final myId = ref.read(authRepositoryProvider).userId;
+    final isHost = room.hostId == myId;
+    final members = ref.watch(roomMembersProvider(room.id)).value ?? const [];
+    final online =
+        ref.watch(onlineUsersProvider(room.id)).value ?? const <String>{};
+
+    return GradientBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          leading: IconButton(
+            tooltip: 'Back to home',
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => context.go('/home'),
+          ),
+          title: Text(room.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+          actions: [
+            PopupMenuButton<String>(
+              tooltip: 'Room menu',
+              onSelected: (_) => onLeave(room, isHost: isHost),
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                  value: 'leave',
+                  child: Text(isHost ? 'Close room' : 'Leave room'),
+                ),
+              ],
+            ),
+          ],
+        ),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 960),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _CodeHeader(room: room),
+                    const SizedBox(height: 20),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        const nowPlaying = _NowPlayingCard();
+                        final listeners = _Listeners(
+                          members: members,
+                          online: online,
+                          myId: myId,
+                        );
+                        if (constraints.maxWidth >= 840) {
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Expanded(flex: 3, child: nowPlaying),
+                              const SizedBox(width: 16),
+                              Expanded(flex: 2, child: listeners),
+                            ],
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            nowPlaying,
+                            const SizedBox(height: 16),
+                            listeners,
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 24),
+                    const _Tabs(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CodeHeader extends StatelessWidget {
+  const _CodeHeader({required this.room});
+
+  final Room room;
+
+  Future<void> _copy(
+    BuildContext context,
+    String text,
+    String confirmation,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    await Clipboard.setData(ClipboardData(text: text));
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(confirmation)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final invite = buildInviteText(
+      roomName: room.name,
+      code: room.code,
+      webOrigin: kIsWeb ? Uri.base.origin : null,
+    );
+
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Container(
+          padding: const EdgeInsets.only(left: 16),
+          decoration: BoxDecoration(
+            color: scheme.primaryContainer,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Semantics(
+                label: 'Room code ${room.code.split('').join(' ')}',
+                child: ExcludeSemantics(
+                  child: Text(
+                    room.code,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 4,
+                      color: scheme.onPrimaryContainer,
+                    ),
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Copy code',
+                color: scheme.onPrimaryContainer,
+                icon: const Icon(Icons.copy),
+                onPressed: () => _copy(context, room.code, 'Code copied'),
+              ),
+            ],
+          ),
+        ),
+        TextButton.icon(
+          onPressed: () => _copy(context, invite, 'Invite copied'),
+          icon: const Icon(Icons.ios_share),
+          label: const Text('Copy invite'),
+        ),
+      ],
+    );
+  }
+}
+
+class _NowPlayingCard extends StatelessWidget {
+  const _NowPlayingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 160),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(
+            children: [
+              Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  color: scheme.primary.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Icon(Icons.music_note, size: 36, color: scheme.primary),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Now playing',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Nothing playing yet',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Listeners extends StatelessWidget {
+  const _Listeners({
+    required this.members,
+    required this.online,
+    required this.myId,
+  });
+
+  final List<RoomMember> members;
+  final Set<String> online;
+  final String? myId;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // Host first, then me, then by join time.
+    final sorted = [...members]
+      ..sort((a, b) {
+        int rank(RoomMember m) => m.isHost ? 0 : (m.userId == myId ? 1 : 2);
+        final byRank = rank(a).compareTo(rank(b));
+        return byRank != 0 ? byRank : a.joinedAt.compareTo(b.joinedAt);
+      });
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Listeners (${members.length})',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final member in sorted)
+                  _ListenerChip(
+                    member: member,
+                    isMe: member.userId == myId,
+                    isOnline: online.contains(member.userId),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ListenerChip extends StatelessWidget {
+  const _ListenerChip({
+    required this.member,
+    required this.isMe,
+    required this.isOnline,
+  });
+
+  final RoomMember member;
+  final bool isMe;
+  final bool isOnline;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final label =
+        '${member.displayName}${isMe ? ', you' : ''}${member.isHost ? ', host' : ''}, ${isOnline ? 'online' : 'offline'}';
+
+    return Semantics(
+      label: label,
+      child: ExcludeSemantics(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 220),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Text(
+                    member.avatarEmoji,
+                    style: const TextStyle(fontSize: 22),
+                  ),
+                  Positioned(
+                    right: -4,
+                    bottom: -2,
+                    child: Container(
+                      key: ValueKey('online-dot-${member.userId}'),
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: isOnline
+                            ? const Color(0xFF3DDC84)
+                            : scheme.outline,
+                        border: Border.all(
+                          color: scheme.surfaceContainerHighest,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 10),
+              if (member.isHost) ...[
+                const Text('👑', style: TextStyle(fontSize: 14)),
+                const SizedBox(width: 4),
+              ],
+              Flexible(
+                child: Text(
+                  member.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (isMe) ...[
+                const SizedBox(width: 6),
+                Text(
+                  'You',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: scheme.primary,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Tabs extends StatelessWidget {
+  const _Tabs();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TabBar(
+            dividerColor: Colors.transparent,
+            indicatorSize: TabBarIndicatorSize.tab,
+            indicator: BoxDecoration(
+              color: scheme.primaryContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            labelColor: scheme.onPrimaryContainer,
+            tabs: const [
+              Tab(text: 'Queue'),
+              Tab(text: 'Chat'),
+            ],
+          ),
+          SizedBox(
+            height: 200,
+            child: TabBarView(
+              children: [
+                for (final what in ['Queue', 'Chat'])
+                  Center(
+                    child: Text(
+                      'Coming soon',
+                      semanticsLabel: '$what: coming soon',
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

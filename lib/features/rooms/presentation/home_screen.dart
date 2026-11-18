@@ -1,10 +1,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/widgets/gradient_background.dart';
 import '../../auth/domain/profile.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../../auth/presentation/profile_sheet.dart';
+import '../domain/room_summary.dart';
+import 'room_sheets.dart';
+import 'rooms_providers.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -38,57 +42,77 @@ class HomeScreen extends ConsumerWidget {
           ],
         ),
         body: SafeArea(
-          child: Center(
+          child: RefreshIndicator(
+            onRefresh: () async {
+              ref.invalidate(myRoomsProvider);
+              try {
+                await ref.read(myRoomsProvider.future);
+              } catch (_) {
+                // The list shows its own error state.
+              }
+            },
             child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.all(24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 640),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name == null ? 'Welcome' : 'Hey, $name',
-                        style: theme.textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 640),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name == null ? 'Welcome' : 'Hey, $name',
+                          style: theme.textTheme.headlineMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Start a room or jump into one with friends.',
-                        style: theme.textTheme.bodyLarge?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                        const SizedBox(height: 4),
+                        Text(
+                          'Start a room or jump into one with friends.',
+                          style: theme.textTheme.bodyLarge?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 24),
-                      LayoutBuilder(
-                        builder: (context, constraints) {
-                          const create = _ComingSoonCard(
-                            icon: Icons.add_circle_outline,
-                            title: 'Create a room',
-                          );
-                          const join = _ComingSoonCard(
-                            icon: Icons.keyboard_outlined,
-                            title: 'Join with a code',
-                          );
-                          if (constraints.maxWidth >= 560) {
-                            return const Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(height: 24),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final create = _ActionCard(
+                              icon: Icons.add_circle_outline,
+                              title: 'Create a room',
+                              onTap: () => showCreateRoomSheet(context),
+                            );
+                            final join = _ActionCard(
+                              icon: Icons.keyboard_outlined,
+                              title: 'Join with a code',
+                              onTap: () => showJoinRoomSheet(context),
+                            );
+                            if (constraints.maxWidth >= 560) {
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(child: create),
+                                  const SizedBox(width: 16),
+                                  Expanded(child: join),
+                                ],
+                              );
+                            }
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                Expanded(child: create),
-                                SizedBox(width: 16),
-                                Expanded(child: join),
+                                create,
+                                const SizedBox(height: 16),
+                                join,
                               ],
                             );
-                          }
-                          return const Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [create, SizedBox(height: 16), join],
-                          );
-                        },
-                      ),
-                    ],
+                          },
+                        ),
+                        const SizedBox(height: 32),
+                        const _MyRooms(),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -135,55 +159,235 @@ class _ProfileChip extends StatelessWidget {
   }
 }
 
-/// A disabled, dimmed card for features that arrive in a later step.
-class _ComingSoonCard extends StatelessWidget {
-  const _ComingSoonCard({required this.icon, required this.title});
+class _ActionCard extends StatelessWidget {
+  const _ActionCard({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+  });
 
   final IconData icon;
   final String title;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return Semantics(
-      label: '$title, coming in the next step',
-      child: ExcludeSemantics(
-        child: Opacity(
-          opacity: 0.55,
-          child: Card(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 140),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 140),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: scheme.primary.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(icon, color: scheme.primary),
+                ),
+                const SizedBox(height: 16),
+                Row(
                   children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: scheme.primary.withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Icon(icon, color: scheme.primary),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      title,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w600,
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Coming in the next step',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
+                    Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
                   ],
                 ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MyRooms extends ConsumerWidget {
+  const _MyRooms();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final rooms = ref.watch(myRoomsProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'My rooms',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Refresh rooms',
+              icon: const Icon(Icons.refresh),
+              onPressed: () => ref.invalidate(myRoomsProvider),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        rooms.when(
+          skipLoadingOnRefresh: true,
+          loading: () => const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+          error: (_, _) => _Message(
+            text: 'Could not load your rooms.',
+            actionLabel: 'Try again',
+            onAction: () => ref.invalidate(myRoomsProvider),
+          ),
+          data: (list) => list.isEmpty
+              ? const _EmptyRooms()
+              : Column(
+                  children: [
+                    for (final summary in list) _RoomTile(summary: summary),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class _EmptyRooms extends StatelessWidget {
+  const _EmptyRooms();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            const Text('🎧', style: TextStyle(fontSize: 40)),
+            const SizedBox(height: 12),
+            Text(
+              'No rooms yet. Create one or join with a code.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyLarge?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Message extends StatelessWidget {
+  const _Message({
+    required this.text,
+    required this.actionLabel,
+    required this.onAction,
+  });
+
+  final String text;
+  final String actionLabel;
+  final VoidCallback onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Expanded(child: Text(text)),
+            TextButton(onPressed: onAction, child: Text(actionLabel)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoomTile extends ConsumerWidget {
+  const _RoomTile({required this.summary});
+
+  final RoomSummary summary;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final room = summary.room;
+    final isHost = room.hostId == ref.read(authRepositoryProvider).userId;
+    final count = summary.memberCount;
+    final listeners = '$count ${count == 1 ? 'listener' : 'listeners'}';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Card(
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => context.go('/room/${room.id}'),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 72),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  if (isHost) ...[
+                    const Text('👑', style: TextStyle(fontSize: 20)),
+                    const SizedBox(width: 12),
+                  ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          room.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          room.code,
+                          style: theme.textTheme.labelLarge?.copyWith(
+                            fontFamily: 'monospace',
+                            letterSpacing: 2,
+                            color: scheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    listeners,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+                ],
               ),
             ),
           ),

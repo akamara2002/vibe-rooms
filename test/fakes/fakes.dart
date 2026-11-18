@@ -10,6 +10,13 @@ import 'package:vibe_rooms/features/auth/domain/auth_repository.dart';
 import 'package:vibe_rooms/features/auth/domain/profile.dart';
 import 'package:vibe_rooms/features/auth/domain/profile_repository.dart';
 import 'package:vibe_rooms/features/auth/presentation/auth_providers.dart';
+import 'package:vibe_rooms/features/rooms/domain/room.dart';
+import 'package:vibe_rooms/features/rooms/domain/room_failure.dart';
+import 'package:vibe_rooms/features/rooms/domain/room_member.dart';
+import 'package:vibe_rooms/features/rooms/domain/room_presence.dart';
+import 'package:vibe_rooms/features/rooms/domain/room_repository.dart';
+import 'package:vibe_rooms/features/rooms/domain/room_summary.dart';
+import 'package:vibe_rooms/features/rooms/presentation/rooms_providers.dart';
 
 /// An in-memory [AuthRepository] with controllable results. No network.
 class FakeAuthRepository implements AuthRepository {
@@ -102,11 +109,118 @@ class FakeProfileRepository implements ProfileRepository {
   }
 }
 
+Room fakeRoom({
+  String id = 'room-1',
+  String code = 'ABC234',
+  String name = 'Test Room',
+  String hostId = 'user-1',
+  DateTime? closedAt,
+}) => Room(
+  id: id,
+  code: code,
+  name: name,
+  hostId: hostId,
+  createdAt: DateTime.utc(2026, 11, 18),
+  closedAt: closedAt,
+);
+
+RoomMember fakeMember(
+  String userId,
+  String name, {
+  String roomId = 'room-1',
+  bool isHost = false,
+  String emoji = '🎧',
+  int order = 0,
+}) => RoomMember(
+  roomId: roomId,
+  userId: userId,
+  joinedAt: DateTime.utc(2026, 11, 18, 10, order),
+  displayName: name,
+  avatarEmoji: emoji,
+  isHost: isHost,
+);
+
+class FakeRoomRepository implements RoomRepository {
+  FakeRoomRepository({
+    List<RoomSummary>? myRoomsList,
+    Map<String, Room>? roomsById,
+    Map<String, List<RoomMember>>? members,
+  }) : mine = myRoomsList ?? [],
+       rooms = roomsById ?? {},
+       membersByRoom = members ?? {};
+
+  List<RoomSummary> mine;
+  Map<String, Room> rooms;
+  Map<String, List<RoomMember>> membersByRoom;
+
+  /// If set, joinRoom fails with this.
+  RoomFailure? joinFailure;
+  RoomFailure? createFailure;
+
+  /// What joinRoom/createRoom return on success.
+  Room? joinResult;
+  Room? createResult;
+
+  Completer<Room>? joinGate;
+  Completer<Room>? createGate;
+  final calls = <String>[];
+
+  @override
+  Future<Room> createRoom(String name) async {
+    calls.add('create:$name');
+    if (createGate != null) return createGate!.future;
+    if (createFailure != null) throw createFailure!;
+    return createResult ?? fakeRoom(name: name);
+  }
+
+  @override
+  Future<Room> joinRoom(String code) async {
+    calls.add('join:$code');
+    if (joinGate != null) return joinGate!.future;
+    if (joinFailure != null) throw joinFailure!;
+    return joinResult ?? fakeRoom(code: code);
+  }
+
+  @override
+  Future<List<RoomSummary>> myRooms() async => mine;
+
+  @override
+  Future<Room?> getRoom(String id) async => rooms[id];
+
+  @override
+  Stream<List<RoomMember>> watchMembers(String roomId) =>
+      Stream.value(membersByRoom[roomId] ?? const []);
+
+  @override
+  Future<void> leaveRoom(String roomId) async {
+    calls.add('leave:$roomId');
+    mine = mine.where((s) => s.room.id != roomId).toList();
+  }
+
+  @override
+  Future<void> closeRoom(String roomId) async {
+    calls.add('close:$roomId');
+    mine = mine.where((s) => s.room.id != roomId).toList();
+  }
+}
+
+class FakeRoomPresence implements RoomPresence {
+  FakeRoomPresence([this.online = const {}]);
+
+  Set<String> online;
+
+  @override
+  Stream<Set<String>> watchOnlineUserIds(String roomId, Profile me) =>
+      Stream.value(online);
+}
+
 /// Pumps the whole app on a phone-sized surface with the given fakes.
 Future<void> pumpApp(
   WidgetTester tester, {
   required FakeAuthRepository auth,
   FakeProfileRepository? profiles,
+  FakeRoomRepository? rooms,
+  FakeRoomPresence? presence,
   bool ready = true,
 }) async {
   tester.view.physicalSize = const Size(900, 1600);
@@ -121,6 +235,8 @@ Future<void> pumpApp(
         profileRepositoryProvider.overrideWithValue(
           profiles ?? FakeProfileRepository(),
         ),
+        roomRepositoryProvider.overrideWithValue(rooms ?? FakeRoomRepository()),
+        roomPresenceProvider.overrideWithValue(presence ?? FakeRoomPresence()),
       ],
       child: const VibeRoomsApp(),
     ),

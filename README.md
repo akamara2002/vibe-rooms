@@ -53,6 +53,17 @@ The app opens on a login screen with two ways in:
 
 Your display name and avatar emoji live in your profile: tap the chip at the top right of the home screen to edit them or sign out. Without a configured `env.json` the login screen explains what is missing and sign-in is disabled.
 
+## Rooms
+
+From the home screen:
+
+- **Create a room:** tap "Create a room", pick a name (up to 40 characters) and tap Create. You land in the room as its host.
+- **Join with a code:** tap "Join with a code" and type or paste the 6-character code (spaces and lower case are fine). A wrong or closed code shows "No room with that code."
+- **Join with a link (web):** in a room, "Copy invite" copies the code and a link like `http://localhost:8080/#/join/ABC234`. Opening it while signed out takes you to the login screen first and then straight into the room.
+- **My rooms** lists your open rooms with a listener count; pull down (or tap the refresh icon) to reload. Inside a room you see who is online in real time. The host can close the room, everyone else can leave it.
+
+Queue and Chat tabs are placeholders for the next steps.
+
 ## Develop
 
 ```
