@@ -226,4 +226,49 @@ void main() {
     expect(find.text('Room not found'), findsOneWidget);
     expect(repo.calls, isEmpty);
   });
+
+  testWidgets(
+    'the room screen has the player card, and on web the sound gate',
+    (tester) async {
+      final repo = FakeRoomRepository(
+        roomsById: {'room-1': fakeRoom(name: 'Friday Vibes')},
+        members: {
+          'room-1': [fakeMember('user-1', 'Ana', isHost: true)],
+        },
+      );
+      final engine = FakeAudioEngine();
+      final catalog = FakeMusicCatalog(
+        trendingTracks: [fakeTrack(id: 'tr1', title: 'Trending One')],
+      );
+      await pumpApp(
+        tester,
+        auth: FakeAuthRepository(signedIn: true),
+        rooms: repo,
+        engine: engine,
+        catalog: catalog,
+        soundGate: true,
+      );
+      GoRouter.of(tester.element(find.byType(HomeScreen))).go('/room/room-1');
+      await tester.pumpAndSettle();
+
+      expect(find.text('Tap to turn on sound'), findsOneWidget);
+      expect(find.text('Nothing playing yet'), findsOneWidget);
+      expect(find.text('Preview mode: not synced yet'), findsOneWidget);
+
+      await tester.tap(find.text('Tap to turn on sound'));
+      await tester.pumpAndSettle();
+      expect(find.text('Tap to turn on sound'), findsNothing);
+
+      await tester.tap(find.text('Find music'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Trending One'));
+      await tester.pumpAndSettle();
+      expect(engine.calls, ['load:tr1', 'play']);
+
+      // Leaving the room disposes the player and so stops the audio.
+      await tester.tap(find.byTooltip('Back to home'));
+      await tester.pumpAndSettle();
+      expect(engine.disposed, isTrue);
+    },
+  );
 }

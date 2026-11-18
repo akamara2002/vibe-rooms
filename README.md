@@ -64,6 +64,14 @@ From the home screen:
 
 Queue and Chat tabs are placeholders for the next steps.
 
+## Music
+
+Music search and playback come from [Audius](https://audius.co), the open music platform. In a room, tap "Find music" to see trending tracks or search by name, then tap a track to play it. For now it plays only on your own device ("Preview mode"); syncing it for everyone in the room comes in the next step. On the web, tap "Tap to turn on sound" first: browsers block audio until you interact with the page.
+
+Every track shows its artist, "Music via Audius" and an "Open on Audius" link to the track on audius.co. Tracks are streamed from Audius and never downloaded or stored.
+
+The Audius read API needs no key. If you have a client-side Audius API key you can add it to `env.json` as `"AUDIUS_API_KEY"` (see `env.example.json`; leave it empty otherwise). It is sent only when set. Never put an Audius bearer token there.
+
 ## Develop
 
 ```

@@ -6,6 +6,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../core/widgets/gradient_background.dart';
 import '../../auth/presentation/auth_providers.dart';
+import '../../player/presentation/player_card.dart';
+import '../../player/presentation/sound_gate.dart';
 import '../domain/room.dart';
 import '../domain/room_code.dart';
 import '../domain/room_failure.dart';
@@ -174,10 +176,11 @@ class _RoomView extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _CodeHeader(room: room),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 16),
+                    const SoundGate(),
                     LayoutBuilder(
                       builder: (context, constraints) {
-                        const nowPlaying = _NowPlayingCard();
+                        const nowPlaying = PlayerCard();
                         final listeners = _Listeners(
                           members: members,
                           online: online,
@@ -286,60 +289,6 @@ class _CodeHeader extends StatelessWidget {
           label: const Text('Copy invite'),
         ),
       ],
-    );
-  }
-}
-
-class _NowPlayingCard extends StatelessWidget {
-  const _NowPlayingCard();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    return Card(
-      margin: EdgeInsets.zero,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 160),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Row(
-            children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(
-                  color: scheme.primary.withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: Icon(Icons.music_note, size: 36, color: scheme.primary),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Now playing',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Nothing playing yet',
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }

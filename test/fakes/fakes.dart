@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_test/flutter_test.dart' hide EnginePhase;
 import 'package:vibe_rooms/app.dart';
 import 'package:vibe_rooms/core/supabase_client.dart';
 import 'package:vibe_rooms/features/auth/domain/auth_failure.dart';
@@ -10,6 +10,11 @@ import 'package:vibe_rooms/features/auth/domain/auth_repository.dart';
 import 'package:vibe_rooms/features/auth/domain/profile.dart';
 import 'package:vibe_rooms/features/auth/domain/profile_repository.dart';
 import 'package:vibe_rooms/features/auth/presentation/auth_providers.dart';
+import 'package:vibe_rooms/features/player/domain/audio_engine.dart';
+import 'package:vibe_rooms/features/player/domain/audius_failure.dart';
+import 'package:vibe_rooms/features/player/domain/music_catalog.dart';
+import 'package:vibe_rooms/features/player/domain/track.dart';
+import 'package:vibe_rooms/features/player/presentation/player_providers.dart';
 import 'package:vibe_rooms/features/rooms/domain/room.dart';
 import 'package:vibe_rooms/features/rooms/domain/room_failure.dart';
 import 'package:vibe_rooms/features/rooms/domain/room_member.dart';
@@ -214,6 +219,165 @@ class FakeRoomPresence implements RoomPresence {
       Stream.value(online);
 }
 
+Track fakeTrack({
+  String id = 't1',
+  String title = 'Song One',
+  String artist = 'Artist One',
+  int durationMs = 180000,
+  String? artworkUrl,
+  String? permalinkUrl,
+}) => Track(
+  id: id,
+  title: title,
+  artist: artist,
+  durationMs: durationMs,
+  artworkUrl: artworkUrl,
+  permalinkUrl: permalinkUrl,
+);
+
+/// An [AudioEngine] driven by the test. No audio, no plugins.
+class FakeAudioEngine implements AudioEngine {
+  final calls = <String>[];
+  final _phases = StreamController<EnginePhase>.broadcast();
+  final _positions = StreamController<Duration>.broadcast();
+  final _durations = StreamController<Duration?>.broadcast();
+
+  EnginePhase _phase = EnginePhase.idle;
+  Duration _position = Duration.zero;
+  Duration? _duration;
+  int _generation = 0;
+
+  Uri? loadedUrl;
+  Duration? loadedInitialPosition;
+  bool disposed = false;
+
+  /// While set, load() waits for it (to test cancellation).
+  Completer<void>? loadGate;
+
+  /// If true, the next load() ends in the error phase.
+  bool failNextLoad = false;
+
+  void emitPhase(EnginePhase phase) {
+    _phase = phase;
+    _phases.add(phase);
+  }
+
+  void emitPosition(Duration position) {
+    _position = position;
+    _positions.add(position);
+  }
+
+  void emitDuration(Duration? duration) {
+    _duration = duration;
+    _durations.add(duration);
+  }
+
+  @override
+  Future<void> load(Uri url, {Duration? initialPosition}) async {
+    calls.add(
+      'load:${url.pathSegments.length > 2 ? url.pathSegments[2] : url}',
+    );
+    final generation = ++_generation;
+    loadedUrl = url;
+    loadedInitialPosition = initialPosition;
+    emitPhase(EnginePhase.loading);
+    if (loadGate != null) await loadGate!.future;
+    if (generation != _generation || disposed) return;
+    if (failNextLoad) {
+      failNextLoad = false;
+      emitPhase(EnginePhase.error);
+      return;
+    }
+    emitPhase(EnginePhase.ready);
+  }
+
+  @override
+  Future<void> play() async {
+    calls.add('play');
+    emitPhase(EnginePhase.playing);
+  }
+
+  @override
+  Future<void> playFrom(Duration position) async {
+    calls.add('playFrom:${position.inMilliseconds}');
+    emitPosition(position);
+    emitPhase(EnginePhase.playing);
+  }
+
+  @override
+  Future<void> pause() async {
+    calls.add('pause');
+    emitPhase(EnginePhase.paused);
+  }
+
+  @override
+  Future<void> seek(Duration position) async {
+    calls.add('seek:${position.inMilliseconds}');
+    emitPosition(position);
+  }
+
+  @override
+  Future<void> setSpeed(double speed) async => calls.add('speed:$speed');
+
+  @override
+  Duration get position => _position;
+  @override
+  Stream<Duration> get positionStream => _positions.stream;
+  @override
+  EnginePhase get phase => _phase;
+  @override
+  Stream<EnginePhase> get phaseStream => _phases.stream;
+  @override
+  Duration? get duration => _duration;
+  @override
+  Stream<Duration?> get durationStream => _durations.stream;
+
+  @override
+  Future<void> dispose() async {
+    calls.add('dispose');
+    disposed = true;
+    _generation++;
+  }
+}
+
+/// A [MusicCatalog] with canned results. No network.
+class FakeMusicCatalog implements MusicCatalog {
+  FakeMusicCatalog({
+    List<Track>? trendingTracks,
+    Map<String, List<Track>>? results,
+  }) : trendingTracks = trendingTracks ?? [],
+       results = results ?? {};
+
+  List<Track> trendingTracks;
+  Map<String, List<Track>> results;
+  AudiusFailure? trendingFailure;
+  AudiusFailure? searchFailure;
+
+  /// If set for a query, search() for it waits for the completer.
+  final searchGates = <String, Completer<void>>{};
+  final calls = <String>[];
+
+  @override
+  Future<List<Track>> search(String query, {int limit = 20}) async {
+    calls.add('search:$query');
+    final gate = searchGates[query];
+    if (gate != null) await gate.future;
+    if (searchFailure != null) throw searchFailure!;
+    return results[query] ?? [];
+  }
+
+  @override
+  Future<List<Track>> trending({int limit = 20}) async {
+    calls.add('trending');
+    if (trendingFailure != null) throw trendingFailure!;
+    return trendingTracks;
+  }
+
+  @override
+  Uri streamUri(String trackId) =>
+      Uri.parse('https://audio.test/v1/tracks/$trackId/stream');
+}
+
 /// Pumps the whole app on a phone-sized surface with the given fakes.
 Future<void> pumpApp(
   WidgetTester tester, {
@@ -221,6 +385,9 @@ Future<void> pumpApp(
   FakeProfileRepository? profiles,
   FakeRoomRepository? rooms,
   FakeRoomPresence? presence,
+  FakeAudioEngine? engine,
+  FakeMusicCatalog? catalog,
+  bool soundGate = false,
   bool ready = true,
 }) async {
   tester.view.physicalSize = const Size(900, 1600);
@@ -237,6 +404,11 @@ Future<void> pumpApp(
         ),
         roomRepositoryProvider.overrideWithValue(rooms ?? FakeRoomRepository()),
         roomPresenceProvider.overrideWithValue(presence ?? FakeRoomPresence()),
+        audioEngineFactoryProvider.overrideWithValue(
+          () => engine ?? FakeAudioEngine(),
+        ),
+        musicCatalogProvider.overrideWithValue(catalog ?? FakeMusicCatalog()),
+        soundGateRequiredProvider.overrideWithValue(soundGate),
       ],
       child: const VibeRoomsApp(),
     ),
