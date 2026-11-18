@@ -11,10 +11,7 @@ class RoomScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return PlaceholderScreen(
       route: '/room/$id',
-      links: const [
-        PlaceholderLink('Go to Login', '/login'),
-        PlaceholderLink('Go to Home', '/home'),
-      ],
+      links: const [PlaceholderLink('Back to home', '/home')],
     );
   }
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'config.dart';
@@ -17,7 +18,12 @@ Future<bool> initSupabase(AppConfig config) async {
     return true;
   } catch (e) {
     // Keys are present but unusable (bad URL, no network): log, don't crash.
-    debugPrint('Supabase.initialize failed: $e');
+    // Only the type: the message of a network error contains the project URL.
+    debugPrint('Supabase.initialize failed (${e.runtimeType})');
     return false;
   }
 }
+
+/// Whether [initSupabase] succeeded. Overridden in `main`. Repositories that
+/// use `Supabase.instance` must only be created when this is true.
+final supabaseReadyProvider = Provider<bool>((_) => false);

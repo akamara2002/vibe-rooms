@@ -44,6 +44,15 @@ Run these steps by hand, once per Supabase project:
 
 To start over during development, run `supabase/migrations/0000_reset_dev.sql` (it deletes all app data), then run `0001_init.sql` again.
 
+## Sign-in
+
+The app opens on a login screen with two ways in:
+
+- **Quick start:** type a display name and tap "Continue as guest". A guest account lives only in this browser or app; signing out loses it.
+- **Email:** sign in, or switch to "Create account" (also asks for a display name). If your Supabase project has "Confirm email" on, creating an account asks you to confirm by email first; for development, turn it off (see Database setup).
+
+Your display name and avatar emoji live in your profile: tap the chip at the top right of the home screen to edit them or sign out. Without a configured `env.json` the login screen explains what is missing and sign-in is disabled.
+
 ## Develop
 
 ```

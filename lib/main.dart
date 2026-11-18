@@ -7,7 +7,12 @@ import 'core/supabase_client.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Skipped (not failed) when keys are missing; screens show a banner.
-  await initSupabase(config);
-  runApp(const ProviderScope(child: VibeRoomsApp()));
+  // Skipped (not failed) when keys are missing; the login screen explains it.
+  final supabaseReady = await initSupabase(config);
+  runApp(
+    ProviderScope(
+      overrides: [supabaseReadyProvider.overrideWithValue(supabaseReady)],
+      child: const VibeRoomsApp(),
+    ),
+  );
 }
