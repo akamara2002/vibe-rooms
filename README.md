@@ -76,6 +76,10 @@ The Audius read API needs no key. If you have a client-side Audius API key you c
 
 The room's playback state is one database row: "at server time T the track was at position P and was playing or paused". Only the host can change it. Every device measures how far its own clock is from the server (five quick `server_now()` calls, keeping the fastest), so it can work out where the music should be right now, and it nudges its player there whenever it drifts by more than about a third of a second. Listeners can only mute locally; the host's play, pause, seek and track changes reach everyone within a second or so. Open "Sync debug" (always on in debug builds, or tap the room name five times) to see the measured clock offset, round trip and drift.
 
+## Queue
+
+Everyone in a room can add songs: open the Queue tab and tap "Add songs", then "+" on any result (the sheet stays open so you can add several). The list is the same for everyone, live, with who added what. The host can play any song right away, skip with "Next", and remove anything; you can remove your own songs. When a song ends, the host's device starts the next one automatically, so keep the host's app open. Limits: 50 songs per room and 10 per person; a song that is already queued can't be added twice.
+
 ## Develop
 
 ```

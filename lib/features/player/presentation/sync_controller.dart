@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../queue/domain/queue_item.dart';
 import '../domain/audio_engine.dart';
 import '../domain/room_state.dart';
 import '../domain/room_state_repository.dart';
@@ -42,6 +43,21 @@ class SyncState {
   bool get hasTrack => room?.trackId != null;
 }
 
+/// What the queue did when the host's song ended.
+enum TrackEndResult {
+  /// The next song was started (or the ended state written).
+  advanced,
+
+  /// The room had already moved on (a skip, another tab): nothing to do.
+  ignored,
+
+  /// It could not be done (network): try again on a later tick.
+  failed,
+}
+
+/// Called on the host when the current song ends.
+typedef TrackEndHandler = Future<TrackEndResult> Function(RoomState ended);
+
 const hostOnlyMessage = 'Only the host can control the music.';
 
 /// Drives the engine from the room's playback row.
@@ -68,6 +84,10 @@ class SyncController extends Notifier<SyncState> {
   final _timers = <Timer>[];
   Timer? _postLoadTimer;
   _ResumeObserver? _observer;
+
+  /// Set by the queue: what to do when the host's song ends. Without one the
+  /// ended state is written.
+  TrackEndHandler? onTrackEnded;
 
   bool _disposed = false;
   bool _busy = false;
@@ -359,20 +379,28 @@ class SyncController extends Notifier<SyncState> {
 
   // ------------------------------------------------------------- host: write
 
-  /// The host writes the track end exactly once per anchor.
+  /// The host handles the end of a track exactly once per anchor: the queue
+  /// starts the next song, or the ended state is written.
   Future<void> _maybeWriteEnd(RoomState room) async {
     if (!args.isHost || !room.isPlaying) return;
     final duration = room.durationMs;
     if (duration == null || _endWrittenFor == room.updatedAt) return;
     _endWrittenFor = room.updatedAt;
-    try {
-      await _repo.hostUpdate(
-        args.roomId,
-        RoomStateUpdate.playback(isPlaying: false, positionMs: duration),
-      );
-    } catch (_) {
-      _endWrittenFor = null; // allow one more try on a later tick
+    final handler = onTrackEnded;
+    if (handler != null) {
+      TrackEndResult result;
+      try {
+        result = await handler(room);
+      } catch (_) {
+        result = TrackEndResult.failed;
+      }
+      // Failed: allow one more try on a later tick. Ignored: the room moved
+      // on, and writing the ended state now would undo that.
+      if (result == TrackEndResult.failed) _endWrittenFor = null;
+      return;
     }
+    final ok = await hostEnd();
+    if (!ok) _endWrittenFor = null;
   }
 
   void _enableSound() => ref.read(soundEnabledProvider.notifier).enable();
@@ -400,7 +428,7 @@ class SyncController extends Notifier<SyncState> {
         : half;
   }
 
-  Future<void> _hostWrite({
+  Future<bool> _hostWrite({
     required RoomState optimistic,
     required RoomStateUpdate update,
     bool resetSeekGuard = false,
@@ -414,8 +442,9 @@ class SyncController extends Notifier<SyncState> {
     _publish();
     try {
       await _repo.hostUpdate(args.roomId, update);
+      return true;
     } catch (error) {
-      if (_disposed) return;
+      if (_disposed) return false;
       // Undo only if nothing newer arrived meanwhile: a fresher row from the
       // server must not be overwritten with the stale pre-write one.
       if (identical(_room, optimistic)) _room = previous;
@@ -424,6 +453,7 @@ class SyncController extends Notifier<SyncState> {
           : const RoomStateFailure(RoomStateFailureKind.unknown).message;
       _requestTick();
       _publish();
+      return false;
     }
   }
 
@@ -450,6 +480,56 @@ class SyncController extends Notifier<SyncState> {
       ),
       update: update,
       resetSeekGuard: true,
+    );
+  }
+
+  /// Host: start the queued [item] from the start. Returns false (and says
+  /// why in [SyncState.errorMessage]) if the room row was not written; the
+  /// caller then marks nothing as played.
+  Future<bool> hostAdvanceTo(QueueItem item) async {
+    if (!args.isHost) {
+      _refuse();
+      return false;
+    }
+    final room = _room;
+    if (room == null) return false;
+    _enableSound();
+    _endWrittenFor = null;
+    return _hostWrite(
+      optimistic: RoomState(
+        roomId: room.roomId,
+        queueItemId: item.id,
+        trackId: item.trackId,
+        title: item.title,
+        artist: item.artist,
+        artworkUrl: item.artworkUrl,
+        durationMs: item.durationMs,
+        isPlaying: true,
+        positionMs: 0,
+        updatedAt: _clock.nowServer(),
+        updatedBy: room.updatedBy,
+      ),
+      update: RoomStateUpdate.queueItem(item),
+      resetSeekGuard: true,
+    );
+  }
+
+  /// Host: the song is over and nothing follows (the ended state).
+  Future<bool> hostEnd() async {
+    if (!args.isHost) {
+      _refuse();
+      return false;
+    }
+    final room = _room;
+    final duration = room?.durationMs;
+    if (room == null || duration == null) return false;
+    return _hostWrite(
+      optimistic: room.copyWith(
+        isPlaying: false,
+        positionMs: duration,
+        updatedAt: _clock.nowServer(),
+      ),
+      update: RoomStateUpdate.playback(isPlaying: false, positionMs: duration),
     );
   }
 

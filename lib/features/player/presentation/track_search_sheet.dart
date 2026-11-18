@@ -5,26 +5,43 @@ import 'package:material_ui/material_ui.dart';
 
 import '../domain/audius_failure.dart';
 import '../domain/track.dart';
-import 'artwork.dart';
-import 'format_duration.dart';
 import 'player_providers.dart';
+import 'track_tile.dart';
 
 /// How long typing must pause before a search is sent.
 const searchDebounce = Duration(milliseconds: 400);
 
 /// Opens [TrackSearchSheet]. Reusable: it knows nothing about rooms.
+///
+/// Two modes, both through callbacks (the sheet knows nothing about rooms or
+/// the database):
+///  * pick mode ([onTrackSelected]): a tap picks a track and closes the sheet;
+///  * add mode ([onAdd]): each result has a "+" that adds it and shows
+///    "Added", and the sheet stays open. [onAdd] returns why it failed (shown
+///    in a snackbar) or null. [onPlayNow], if given, adds a "Play now" action
+///    (host only). [queuedTrackIds] are shown as already added.
 Future<void> showTrackSearchSheet(
   BuildContext context, {
-  required void Function(Track track) onTrackSelected,
+  void Function(Track track)? onTrackSelected,
+  Future<String?> Function(Track track)? onAdd,
+  void Function(Track track)? onPlayNow,
+  Set<String> queuedTrackIds = const {},
   String title = 'Find music',
 }) {
+  assert(onTrackSelected != null || onAdd != null);
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
     builder: (_) => FractionallySizedBox(
       heightFactor: 0.85,
-      child: TrackSearchSheet(onTrackSelected: onTrackSelected, title: title),
+      child: TrackSearchSheet(
+        onTrackSelected: onTrackSelected,
+        onAdd: onAdd,
+        onPlayNow: onPlayNow,
+        queuedTrackIds: queuedTrackIds,
+        title: title,
+      ),
     ),
   );
 }
@@ -33,11 +50,17 @@ Future<void> showTrackSearchSheet(
 class TrackSearchSheet extends ConsumerStatefulWidget {
   const TrackSearchSheet({
     super.key,
-    required this.onTrackSelected,
+    this.onTrackSelected,
+    this.onAdd,
+    this.onPlayNow,
+    this.queuedTrackIds = const {},
     this.title = 'Find music',
   });
 
-  final void Function(Track track) onTrackSelected;
+  final void Function(Track track)? onTrackSelected;
+  final Future<String?> Function(Track track)? onAdd;
+  final void Function(Track track)? onPlayNow;
+  final Set<String> queuedTrackIds;
   final String title;
 
   @override
@@ -56,6 +79,10 @@ class _TrackSearchSheetState extends ConsumerState<TrackSearchSheet> {
   List<Track>? _results;
   AudiusFailure? _failure;
   bool _loading = false;
+
+  /// Add mode: tracks being added or added (by track id).
+  final _adding = <String>{};
+  late final Set<String> _added = {...widget.queuedTrackIds};
 
   @override
   void dispose() {
@@ -125,7 +152,59 @@ class _TrackSearchSheetState extends ConsumerState<TrackSearchSheet> {
 
   void _select(Track track) {
     Navigator.of(context).pop();
-    widget.onTrackSelected(track);
+    widget.onTrackSelected?.call(track);
+  }
+
+  Future<void> _addTrack(Track track) async {
+    final onAdd = widget.onAdd;
+    if (onAdd == null ||
+        _adding.contains(track.id) ||
+        _added.contains(track.id)) {
+      return;
+    }
+    // Captured before the await: the sheet may be closed meanwhile.
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _adding.add(track.id));
+    final problem = await onAdd(track);
+    if (!mounted) return;
+    setState(() {
+      _adding.remove(track.id);
+      if (problem == null) _added.add(track.id);
+    });
+    if (problem != null) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(problem)));
+    }
+  }
+
+  void _playNow(Track track) {
+    Navigator.of(context).pop();
+    widget.onPlayNow?.call(track);
+  }
+
+  Widget _tile(Track track) {
+    final adding = widget.onAdd != null;
+    return TrackTile(
+      title: track.title,
+      artist: track.artist,
+      duration: track.duration,
+      artworkUrl: track.artworkUrl,
+      onTap: adding ? () => _addTrack(track) : () => _select(track),
+      actions: [
+        if (adding && widget.onPlayNow != null)
+          TextButton(
+            onPressed: () => _playNow(track),
+            child: const Text('Play now'),
+          ),
+        if (adding)
+          _AddButton(
+            added: _added.contains(track.id),
+            adding: _adding.contains(track.id),
+            onPressed: () => _addTrack(track),
+          ),
+      ],
+    );
   }
 
   @override
@@ -152,7 +231,7 @@ class _TrackSearchSheetState extends ConsumerState<TrackSearchSheet> {
                 icon: Icons.music_off_outlined,
                 message: 'Nothing is trending right now.',
               )
-            : _TrackList(label: 'Trending', tracks: tracks, onSelect: _select),
+            : _TrackList(label: 'Trending', tracks: tracks, tile: _tile),
       );
     } else if (_loading) {
       body = const _Skeletons();
@@ -168,62 +247,122 @@ class _TrackSearchSheetState extends ConsumerState<TrackSearchSheet> {
       body = _TrackList(
         label: 'Results for "$_query"',
         tracks: _results!,
-        onSelect: _select,
+        tile: _tile,
       );
     }
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+    // Its own Scaffold, so a snackbar shows above the sheet instead of behind.
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      resizeToAvoidBottomInset: false,
+      body: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    widget.title,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _field,
+                    autofocus: true,
+                    textInputAction: TextInputAction.search,
+                    onChanged: _onChanged,
+                    decoration: InputDecoration(
+                      hintText: 'Search Audius',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _field.text.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Clear',
+                              icon: const Icon(Icons.close),
+                              onPressed: () {
+                                _field.clear();
+                                _onChanged('');
+                              },
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(child: body),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Text(
+                'Music via Audius',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AddButton extends StatelessWidget {
+  const _AddButton({
+    required this.added,
+    required this.adding,
+    required this.onPressed,
+  });
+
+  final bool added;
+  final bool adding;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (added) {
+      return Semantics(
+        label: 'Added',
+        child: ExcludeSemantics(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  widget.title,
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _field,
-                  autofocus: true,
-                  textInputAction: TextInputAction.search,
-                  onChanged: _onChanged,
-                  decoration: InputDecoration(
-                    hintText: 'Search Audius',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _field.text.isEmpty
-                        ? null
-                        : IconButton(
-                            tooltip: 'Clear',
-                            icon: const Icon(Icons.close),
-                            onPressed: () {
-                              _field.clear();
-                              _onChanged('');
-                            },
-                          ),
-                  ),
-                ),
+                Icon(Icons.check, size: 20, color: scheme.primary),
+                const SizedBox(width: 4),
+                Text('Added', style: TextStyle(color: scheme.primary)),
               ],
             ),
           ),
-          Expanded(child: body),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Text(
-              'Music via Audius',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
+        ),
+      );
+    }
+    if (adding) {
+      return const SizedBox(
+        width: 48,
+        height: 48,
+        child: Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2.5),
           ),
-        ],
-      ),
+        ),
+      );
+    }
+    return IconButton(
+      tooltip: 'Add to queue',
+      onPressed: onPressed,
+      icon: const Icon(Icons.add),
     );
   }
 }
@@ -232,12 +371,12 @@ class _TrackList extends StatelessWidget {
   const _TrackList({
     required this.label,
     required this.tracks,
-    required this.onSelect,
+    required this.tile,
   });
 
   final String label;
   final List<Track> tracks;
-  final void Function(Track) onSelect;
+  final Widget Function(Track) tile;
 
   @override
   Widget build(BuildContext context) {
@@ -253,78 +392,8 @@ class _TrackList extends StatelessWidget {
           );
         }
         final track = tracks[index - 1];
-        return _TrackRow(track: track, onTap: () => onSelect(track));
+        return tile(track);
       },
-    );
-  }
-}
-
-class _TrackRow extends StatelessWidget {
-  const _TrackRow({required this.track, required this.onTap});
-
-  final Track track;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final length = formatDuration(track.duration);
-    return Semantics(
-      button: true,
-      label: '${track.title} by ${track.artist}, $length',
-      // The tap action must live here: the InkWell below is excluded from
-      // semantics, so without it a screen reader could not open the row.
-      onTap: onTap,
-      child: ExcludeSemantics(
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: onTap,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 72),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Row(
-                children: [
-                  Artwork(url: track.artworkUrl, size: 56, radius: 10),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          track.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          track.artist,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    length,
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

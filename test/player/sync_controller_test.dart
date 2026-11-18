@@ -249,6 +249,41 @@ void main() {
       );
     });
 
+    rigTest(
+      'a row that carries a new queue_item_id makes the listener play that song',
+      (rig) {
+        rig.elapse(const Duration(seconds: 3));
+        expect(rig.engine.calls, contains('load:t1'));
+
+        // The host's queue advanced: a new track, linked to a queue item.
+        rig.repo.emit(
+          RoomState(
+            roomId: 'room-1',
+            queueItemId: 'item-7',
+            trackId: 'queued-track',
+            title: 'From the queue',
+            artist: 'Someone',
+            durationMs: 200000,
+            isPlaying: true,
+            positionMs: 0,
+            updatedAt: rig.trueNow(),
+          ),
+        );
+        rig.elapse(const Duration(seconds: 1));
+
+        expect(rig.state.room!.queueItemId, 'item-7');
+        expect(rig.state.room!.title, 'From the queue');
+        expect(rig.engine.calls, contains('load:queued-track'));
+        expect(rig.engine.phase, EnginePhase.playing);
+        expect(
+          (rig.engine.position.inMilliseconds - rig.expectedNow()).abs(),
+          lessThan(300),
+        );
+        // The listener never wrote anything.
+        expect(rig.repo.writes, isEmpty);
+      },
+    );
+
     rigTest('an event older than the newest is ignored', (rig) {
       rig.elapse(const Duration(seconds: 3));
       final newer = rig.row(positionMs: 100000);

@@ -14,6 +14,8 @@ class QueueItem {
     required this.sortKey,
     this.playedAt,
     required this.createdAt,
+    this.addedByName,
+    this.addedByEmoji,
   });
 
   factory QueueItem.fromJson(Map<String, dynamic> json) => QueueItem(
@@ -30,7 +32,19 @@ class QueueItem {
         ? null
         : parseUtc(json['played_at'] as String),
     createdAt: parseUtc(json['created_at'] as String),
+    // Embedded by `select('*, profiles(display_name, avatar_emoji)')`.
+    addedByName: _profile(json)?['display_name'] as String?,
+    addedByEmoji: _profile(json)?['avatar_emoji'] as String?,
   );
+
+  static Map<String, dynamic>? _profile(Map<String, dynamic> json) {
+    final profile = json['profiles'];
+    if (profile is Map<String, dynamic>) return profile;
+    if (profile is List && profile.isNotEmpty && profile.first is Map) {
+      return Map<String, dynamic>.from(profile.first as Map);
+    }
+    return null;
+  }
 
   final String id;
   final String roomId;
@@ -45,6 +59,10 @@ class QueueItem {
   final int sortKey;
   final DateTime? playedAt;
   final DateTime createdAt;
+
+  /// Who added it (from the embedded profile); not a column of this table.
+  final String? addedByName;
+  final String? addedByEmoji;
 
   /// The full row (for tests and caching).
   Map<String, dynamic> toJson() => {

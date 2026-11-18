@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../queue/presentation/queue_providers.dart';
 import '../domain/sync_status.dart';
 import 'artwork.dart';
 import 'format_duration.dart';
@@ -34,6 +35,26 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final isHost = widget.args.isHost;
     final room = sync.room;
     final hasTrack = sync.hasTrack;
+    // Only the host has Next; the queue state is read only for them.
+    final queue = isHost
+        ? ref.watch(queueControllerProvider(widget.args))
+        : null;
+    final hasUpcoming = isHost
+        ? (ref.watch(visibleUpcomingProvider(widget.args)).value ?? const [])
+              .isNotEmpty
+        : false;
+
+    Future<void> playNext() async {
+      final messenger = ScaffoldMessenger.of(context);
+      final problem = await ref
+          .read(queueControllerProvider(widget.args).notifier)
+          .playNext();
+      if (problem != null) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(problem)));
+      }
+    }
 
     void findMusic() {
       // Picking a track is a tap, so it also unlocks sound on the web.
@@ -66,7 +87,13 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
             ),
             const SizedBox(height: 12),
             if (!hasTrack)
-              _EmptyPlayer(isHost: isHost, onFindMusic: findMusic)
+              _EmptyPlayer(
+                isHost: isHost,
+                onFindMusic: findMusic,
+                onPlayNext: hasUpcoming && !(queue?.advancing ?? false)
+                    ? playNext
+                    : null,
+              )
             else ...[
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -125,7 +152,16 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                       playing: room.isPlaying,
                       onPressed: controller.hostTogglePlay,
                     ),
-                  if (isHost) const SizedBox(width: 12),
+                  if (isHost) const SizedBox(width: 8),
+                  if (isHost)
+                    IconButton.filledTonal(
+                      tooltip: 'Next',
+                      onPressed: hasUpcoming && !(queue?.advancing ?? false)
+                          ? playNext
+                          : null,
+                      icon: const Icon(Icons.skip_next),
+                    ),
+                  const SizedBox(width: 8),
                   _MuteButton(
                     muted: sync.muted,
                     onPressed: controller.toggleMute,
@@ -216,10 +252,17 @@ class _SyncChip extends ConsumerWidget {
 }
 
 class _EmptyPlayer extends StatelessWidget {
-  const _EmptyPlayer({required this.isHost, required this.onFindMusic});
+  const _EmptyPlayer({
+    required this.isHost,
+    required this.onFindMusic,
+    required this.onPlayNext,
+  });
 
   final bool isHost;
   final VoidCallback onFindMusic;
+
+  /// Songs are queued but nothing is playing: start them.
+  final VoidCallback? onPlayNext;
 
   @override
   Widget build(BuildContext context) {
@@ -259,6 +302,14 @@ class _EmptyPlayer extends StatelessWidget {
             icon: const Icon(Icons.search),
             label: const Text('Find music'),
           ),
+          if (onPlayNext != null) ...[
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: onPlayNext,
+              icon: const Icon(Icons.skip_next),
+              label: const Text('Play next'),
+            ),
+          ],
         ],
       ],
     );

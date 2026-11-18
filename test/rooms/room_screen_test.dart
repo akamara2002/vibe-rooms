@@ -57,7 +57,10 @@ void main() {
     expect(find.text('Listeners (3)'), findsOneWidget);
     expect(find.text('Queue'), findsOneWidget);
     expect(find.text('Chat'), findsOneWidget);
-    expect(find.text('Coming soon'), findsOneWidget);
+    expect(
+      find.text('Nothing queued. Add songs with Find music.'),
+      findsOneWidget,
+    );
     await tester.tap(find.text('Chat'));
     await tester.pumpAndSettle();
     expect(find.text('Coming soon'), findsOneWidget);
@@ -270,7 +273,8 @@ void main() {
       expect(roomState.writes.single['is_playing'], true);
       expect(roomState.writes.single.containsKey('updated_at'), isFalse);
       expect(engine.calls, contains('load:tr1'));
-      expect(find.text('Trending One'), findsOneWidget);
+      // On the player card and as the pinned row of the Queue tab.
+      expect(find.text('Trending One'), findsNWidgets(2));
 
       // Leaving the room disposes the player and so stops the audio.
       await tester.tap(find.byTooltip('Back to home'));

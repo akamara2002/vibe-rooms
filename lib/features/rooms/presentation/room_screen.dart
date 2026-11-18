@@ -7,6 +7,8 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/widgets/gradient_background.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../../player/presentation/player_card.dart';
+import '../../queue/presentation/queue_providers.dart';
+import '../../queue/presentation/queue_tab.dart';
 import '../../player/presentation/sync_controller.dart';
 import '../../player/presentation/sync_providers.dart';
 import '../../player/presentation/sound_gate.dart';
@@ -159,6 +161,12 @@ class _RoomViewState extends ConsumerState<_RoomView> {
     final playing = ref.watch(
       syncControllerProvider(args).select((s) => s.room?.isPlaying ?? false),
     );
+    // Keeps the queue controller (and its end-of-song hook) alive for the
+    // whole visit without rebuilding the screen.
+    ref.watch(queueControllerProvider(args).select((_) => true));
+    // And the queue's realtime channel, so switching tabs does not drop and
+    // rejoin it.
+    ref.watch(upcomingItemsProvider(room.id).select((_) => true));
     final showDebug = ref.watch(debugPanelDefaultProvider) || _titleTaps >= 5;
 
     return GradientBackground(
@@ -243,7 +251,7 @@ class _RoomViewState extends ConsumerState<_RoomView> {
                       _SyncDebugPanel(args: args),
                     ],
                     const SizedBox(height: 24),
-                    const _Tabs(),
+                    _Tabs(args: args),
                   ],
                 ),
               ),
@@ -475,50 +483,64 @@ class _ListenerChip extends StatelessWidget {
   }
 }
 
-class _Tabs extends StatelessWidget {
-  const _Tabs();
+class _Tabs extends StatefulWidget {
+  const _Tabs({required this.args});
+
+  final SyncArgs args;
+
+  @override
+  State<_Tabs> createState() => _TabsState();
+}
+
+class _TabsState extends State<_Tabs> with SingleTickerProviderStateMixin {
+  late final TabController _controller = TabController(length: 2, vsync: this);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return DefaultTabController(
-      length: 2,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TabBar(
-            dividerColor: Colors.transparent,
-            indicatorSize: TabBarIndicatorSize.tab,
-            indicator: BoxDecoration(
-              color: scheme.primaryContainer,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            labelColor: scheme.onPrimaryContainer,
-            tabs: const [
-              Tab(text: 'Queue'),
-              Tab(text: 'Chat'),
-            ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TabBar(
+          controller: _controller,
+          dividerColor: Colors.transparent,
+          indicatorSize: TabBarIndicatorSize.tab,
+          indicator: BoxDecoration(
+            color: scheme.primaryContainer,
+            borderRadius: BorderRadius.circular(12),
           ),
-          SizedBox(
-            height: 200,
-            child: TabBarView(
-              children: [
-                for (final what in ['Queue', 'Chat'])
-                  Center(
+          labelColor: scheme.onPrimaryContainer,
+          tabs: const [
+            Tab(text: 'Queue'),
+            Tab(text: 'Chat'),
+          ],
+        ),
+        // Sized by its content (the queue can be 50 rows long), not fixed.
+        AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) => _controller.index == 0
+              ? QueueTab(args: widget.args)
+              : SizedBox(
+                  height: 200,
+                  child: Center(
                     child: Text(
                       'Coming soon',
-                      semanticsLabel: '$what: coming soon',
+                      semanticsLabel: 'Chat: coming soon',
                       style: theme.textTheme.bodyLarge?.copyWith(
                         color: scheme.onSurfaceVariant,
                       ),
                     ),
                   ),
-              ],
-            ),
-          ),
-        ],
-      ),
+                ),
+        ),
+      ],
     );
   }
 }

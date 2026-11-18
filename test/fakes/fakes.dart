@@ -18,6 +18,10 @@ import 'package:vibe_rooms/features/player/domain/room_state_repository.dart';
 import 'package:vibe_rooms/features/player/domain/track.dart';
 import 'package:vibe_rooms/features/player/presentation/player_providers.dart';
 import 'package:vibe_rooms/features/player/presentation/sync_providers.dart';
+import 'package:vibe_rooms/features/queue/domain/queue_failure.dart';
+import 'package:vibe_rooms/features/queue/domain/queue_item.dart';
+import 'package:vibe_rooms/features/queue/domain/queue_repository.dart';
+import 'package:vibe_rooms/features/queue/presentation/queue_providers.dart';
 import 'package:vibe_rooms/features/rooms/domain/room.dart';
 import 'package:vibe_rooms/features/rooms/domain/room_failure.dart';
 import 'package:vibe_rooms/features/rooms/domain/room_member.dart';
@@ -428,6 +432,166 @@ class FakeMusicCatalog implements MusicCatalog {
       Uri.parse('https://audio.test/v1/tracks/$trackId/stream');
 }
 
+/// A queue row, upcoming unless [playedAt] is given.
+QueueItem fakeQueueItem({
+  String id = 'q1',
+  String roomId = 'room-1',
+  String addedBy = 'user-2',
+  String addedByName = 'Bo',
+  String addedByEmoji = '🎸',
+  String? trackId,
+  String? title,
+  int sortKey = 1,
+  int durationMs = 200000,
+  DateTime? playedAt,
+}) => QueueItem(
+  id: id,
+  roomId: roomId,
+  addedBy: addedBy,
+  trackId: trackId ?? 'track-$id',
+  title: title ?? 'Song $id',
+  artist: 'Artist $id',
+  artworkUrl: null,
+  durationMs: durationMs,
+  sortKey: sortKey,
+  playedAt: playedAt,
+  createdAt: DateTime.utc(2026, 11, 18, 12),
+  addedByName: addedByName,
+  addedByEmoji: addedByEmoji,
+);
+
+/// An in-memory [QueueRepository]: the test plays the database.
+class FakeQueueRepository implements QueueRepository {
+  FakeQueueRepository({List<QueueItem>? items, this.myId = 'user-1'})
+    : all = [...?items];
+
+  /// Every row, played or not.
+  final List<QueueItem> all;
+  final String myId;
+  final _controller = StreamController<List<QueueItem>>.broadcast();
+  final calls = <String>[];
+  int watchCount = 0;
+  int cancelCount = 0;
+  int _nextSort = 100;
+
+  /// Failures for the next call of each kind.
+  QueueFailure? failNextAdd;
+  QueueFailure? failNextRemove;
+  QueueFailure? failNextMark;
+  bool failAllMarks = false;
+
+  /// If set, markPlayed waits for it (to hold an advance half way).
+  Completer<void>? markGate;
+
+  List<QueueItem> get upcomingNow =>
+      (all.where((i) => i.playedAt == null).toList()
+        ..sort((a, b) => a.sortKey.compareTo(b.sortKey)));
+
+  void _emit() => _controller.add(upcomingNow);
+
+  /// Another member's change, as Realtime would deliver it.
+  void externalAdd(QueueItem item) {
+    all.add(item);
+    _emit();
+  }
+
+  QueueItem? byId(String id) => all.where((i) => i.id == id).firstOrNull;
+
+  @override
+  Future<List<QueueItem>> upcoming(String roomId) async {
+    calls.add('upcoming');
+    return upcomingNow;
+  }
+
+  @override
+  Stream<List<QueueItem>> watchUpcoming(String roomId) {
+    watchCount++;
+    late final StreamController<List<QueueItem>> out;
+    StreamSubscription<List<QueueItem>>? sub;
+    out = StreamController<List<QueueItem>>(
+      onListen: () {
+        out.add(upcomingNow);
+        sub = _controller.stream.listen(out.add);
+      },
+      onCancel: () {
+        cancelCount++;
+        return sub?.cancel();
+      },
+    );
+    return out.stream;
+  }
+
+  @override
+  Future<QueueItem> add(String roomId, Track track) async {
+    calls.add('add:${track.id}');
+    final failure = failNextAdd;
+    if (failure != null) {
+      failNextAdd = null;
+      throw failure;
+    }
+    final item = QueueItem(
+      id: 'new-$_nextSort',
+      roomId: roomId,
+      addedBy: myId,
+      trackId: track.id,
+      title: track.title,
+      artist: track.artist,
+      artworkUrl: track.artworkUrl,
+      durationMs: track.durationMs,
+      sortKey: _nextSort++,
+      createdAt: DateTime.utc(2026, 11, 18, 12),
+      addedByName: 'Me',
+      addedByEmoji: '🎧',
+    );
+    all.add(item);
+    _emit();
+    return item;
+  }
+
+  @override
+  Future<void> remove(String itemId) async {
+    calls.add('remove:$itemId');
+    final failure = failNextRemove;
+    if (failure != null) {
+      failNextRemove = null;
+      throw failure;
+    }
+    all.removeWhere((i) => i.id == itemId);
+    _emit();
+  }
+
+  @override
+  Future<void> markPlayed(String itemId, DateTime? at) async {
+    calls.add('mark:$itemId:${at == null ? 'null' : 'now'}');
+    if (markGate != null) await markGate!.future;
+    final failure = failNextMark;
+    if (failure != null) {
+      failNextMark = null;
+      throw failure;
+    }
+    if (failAllMarks) throw const QueueFailure(QueueFailureKind.network);
+    final index = all.indexWhere((i) => i.id == itemId);
+    if (index < 0) throw const QueueFailure(QueueFailureKind.notAllowed);
+    final old = all[index];
+    all[index] = QueueItem(
+      id: old.id,
+      roomId: old.roomId,
+      addedBy: old.addedBy,
+      trackId: old.trackId,
+      title: old.title,
+      artist: old.artist,
+      artworkUrl: old.artworkUrl,
+      durationMs: old.durationMs,
+      sortKey: old.sortKey,
+      playedAt: at,
+      createdAt: old.createdAt,
+      addedByName: old.addedByName,
+      addedByEmoji: old.addedByEmoji,
+    );
+    _emit();
+  }
+}
+
 /// A playback row. Defaults to a room with no track.
 RoomState fakeRoomState({
   String roomId = 'room-1',
@@ -559,6 +723,7 @@ Future<void> pumpApp(
   FakeAudioEngine? engine,
   FakeMusicCatalog? catalog,
   FakeRoomStateRepository? roomState,
+  FakeQueueRepository? queue,
   bool debugPanel = true,
   bool soundGate = false,
   bool ready = true,
@@ -583,6 +748,9 @@ Future<void> pumpApp(
         musicCatalogProvider.overrideWithValue(catalog ?? FakeMusicCatalog()),
         soundGateRequiredProvider.overrideWithValue(soundGate),
         debugPanelDefaultProvider.overrideWithValue(debugPanel),
+        queueRepositoryProvider.overrideWithValue(
+          queue ?? FakeQueueRepository(),
+        ),
         roomStateRepositoryProvider.overrideWithValue(
           roomState ?? FakeRoomStateRepository(),
         ),

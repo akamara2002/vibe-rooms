@@ -1,3 +1,4 @@
+import '../../queue/domain/queue_item.dart';
 import 'room_state.dart';
 import 'track.dart';
 
@@ -37,6 +38,24 @@ class RoomStateUpdate {
       artist: track.artist,
       artworkUrl: track.artworkUrl,
       durationMs: track.durationMs,
+      isPlaying: true,
+      positionMs: 0,
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    ).toUpdateJson(),
+  );
+
+  /// A queued song starting to play: the item's track, position 0, playing.
+  /// `queue_item_id` links the row to the item (and is cleared by the
+  /// database if the item is ever deleted).
+  factory RoomStateUpdate.queueItem(QueueItem item) => RoomStateUpdate._(
+    RoomState(
+      roomId: '',
+      queueItemId: item.id,
+      trackId: item.trackId,
+      title: item.title,
+      artist: item.artist,
+      artworkUrl: item.artworkUrl,
+      durationMs: item.durationMs,
       isPlaying: true,
       positionMs: 0,
       updatedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),

@@ -57,6 +57,7 @@ Future<void> pastDebounce(WidgetTester tester) async {
 }
 
 void main() {
+  addModeTests();
   final trending = [
     fakeTrack(
       id: 'tr1',
@@ -297,4 +298,171 @@ void main() {
       handle.dispose();
     },
   );
+}
+
+/// Add mode: opens the sheet like the Queue tab does.
+Future<void> _openAddSheet(
+  WidgetTester tester, {
+  required FakeMusicCatalog catalog,
+  required Future<String?> Function(Track) onAdd,
+  void Function(Track)? onPlayNow,
+  Set<String> queued = const {},
+}) async {
+  tester.view.physicalSize = const Size(900, 1600);
+  tester.view.devicePixelRatio = 2;
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [musicCatalogProvider.overrideWithValue(catalog)],
+      child: MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: FilledButton(
+                onPressed: () => showTrackSearchSheet(
+                  context,
+                  title: 'Add songs',
+                  onAdd: onAdd,
+                  onPlayNow: onPlayNow,
+                  queuedTrackIds: queued,
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('open'));
+  await tester.pumpAndSettle();
+}
+
+void addModeTests() {
+  final tracks = [
+    fakeTrack(id: 'a', title: 'Alpha'),
+    fakeTrack(id: 'b', title: 'Beta'),
+  ];
+
+  group('add mode', () {
+    testWidgets('+ adds the track, shows Added, and the sheet stays open', (
+      tester,
+    ) async {
+      final added = <String>[];
+      await _openAddSheet(
+        tester,
+        catalog: FakeMusicCatalog(trendingTracks: tracks),
+        onAdd: (t) async {
+          added.add(t.id);
+          return null;
+        },
+      );
+      expect(find.byTooltip('Add to queue'), findsNWidgets(2));
+      await tester.tap(find.byTooltip('Add to queue').first);
+      await tester.pumpAndSettle();
+
+      expect(added, ['a']);
+      expect(find.text('Added'), findsOneWidget);
+      expect(find.byTooltip('Add to queue'), findsOneWidget);
+      // Still open: several songs can be added in a row.
+      expect(find.text('Add songs'), findsOneWidget);
+      await tester.tap(find.byTooltip('Add to queue'));
+      await tester.pumpAndSettle();
+      expect(added, ['a', 'b']);
+      expect(find.text('Added'), findsNWidgets(2));
+    });
+
+    testWidgets('a track that is already added cannot be added twice', (
+      tester,
+    ) async {
+      var calls = 0;
+      await _openAddSheet(
+        tester,
+        catalog: FakeMusicCatalog(trendingTracks: tracks),
+        onAdd: (t) async {
+          calls++;
+          return null;
+        },
+        queued: {'a'},
+      );
+      expect(find.text('Added'), findsOneWidget);
+      await tester.tap(find.text('Alpha'));
+      await tester.pumpAndSettle();
+      expect(calls, 0);
+    });
+
+    testWidgets('tapping the row adds too', (tester) async {
+      final added = <String>[];
+      await _openAddSheet(
+        tester,
+        catalog: FakeMusicCatalog(trendingTracks: tracks),
+        onAdd: (t) async {
+          added.add(t.id);
+          return null;
+        },
+      );
+      await tester.tap(find.text('Beta'));
+      await tester.pumpAndSettle();
+      expect(added, ['b']);
+    });
+
+    testWidgets('a duplicate or a limit shows the message in a snackbar and '
+        'the + comes back', (tester) async {
+      await _openAddSheet(
+        tester,
+        catalog: FakeMusicCatalog(trendingTracks: tracks),
+        onAdd: (t) async => 'Already in the queue',
+      );
+      await tester.tap(find.byTooltip('Add to queue').first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      // The messenger shows it on the page and in the sheet's own Scaffold.
+      expect(find.text('Already in the queue'), findsWidgets);
+      expect(find.text('Added'), findsNothing);
+      expect(find.byTooltip('Add to queue'), findsNWidgets(2));
+    });
+
+    testWidgets('shows a spinner while a track is being added', (tester) async {
+      final gate = Completer<String?>();
+      await _openAddSheet(
+        tester,
+        catalog: FakeMusicCatalog(trendingTracks: tracks),
+        onAdd: (t) => gate.future,
+      );
+      await tester.tap(find.byTooltip('Add to queue').first);
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      // A second tap while adding does nothing.
+      gate.complete(null);
+      await tester.pumpAndSettle();
+      expect(find.text('Added'), findsOneWidget);
+    });
+
+    testWidgets('the host sees Play now on every result, a member does not', (
+      tester,
+    ) async {
+      final played = <String>[];
+      await _openAddSheet(
+        tester,
+        catalog: FakeMusicCatalog(trendingTracks: tracks),
+        onAdd: (t) async => null,
+        onPlayNow: (t) => played.add(t.id),
+      );
+      expect(find.text('Play now'), findsNWidgets(2));
+      await tester.tap(find.text('Play now').last);
+      await tester.pumpAndSettle();
+      expect(played, ['b']);
+      expect(find.text('Add songs'), findsNothing); // Play now closes the sheet
+    });
+
+    testWidgets('a member only has the add action', (tester) async {
+      await _openAddSheet(
+        tester,
+        catalog: FakeMusicCatalog(trendingTracks: tracks),
+        onAdd: (t) async => null,
+      );
+      expect(find.text('Play now'), findsNothing);
+      expect(find.byTooltip('Add to queue'), findsNWidgets(2));
+    });
+  });
 }
