@@ -2,7 +2,7 @@
 
 Friends join a room with a 6-character code and listen to the same [Audius](https://audius.co) track in sync, with a shared queue, live chat and emoji reactions. Built with Flutter and Supabase (Auth, Postgres, Realtime). Android is the main target; web works for quick testing.
 
-> Status: project foundation only. The three screens (`/login`, `/home`, `/room/:id`) are placeholders.
+> Status: foundation and database layer. The three screens (`/login`, `/home`, `/room/:id`) are still placeholders.
 
 ## Setup
 
@@ -29,6 +29,20 @@ Web:
 flutter run -d chrome --dart-define-from-file=env.json
 ```
 or, without a local Chrome window: `flutter run -d web-server --web-port 8080 --dart-define-from-file=env.json` and open http://localhost:8080.
+
+## Database setup
+
+Run these steps by hand, once per Supabase project:
+
+1. Open the Supabase SQL editor.
+2. Run `supabase/migrations/0001_init.sql`.
+3. Run `supabase/tests/verify_structure.sql` and read the table: every table should say "RLS on", the app functions should be "security definer", the four realtime tables should be "in supabase_realtime", and "anon grants" should say "none (good)".
+4. Run `supabase/tests/verify_behavior.sql` and expect an error starting with `VERIFY_OK`. That error is intentional: the test rolls itself back. An error starting with `VERIFY_FAIL` names the check that failed.
+5. Enable Authentication > Sign In / Providers > Allow anonymous sign-ins.
+6. Turn off "Confirm email" for development.
+7. Copy the Project URL and the publishable key into `env.json` (never the secret or `service_role` key).
+
+To start over during development, run `supabase/migrations/0000_reset_dev.sql` (it deletes all app data), then run `0001_init.sql` again.
 
 ## Develop
 
