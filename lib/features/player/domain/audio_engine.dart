@@ -40,6 +40,9 @@ abstract class AudioEngine {
   /// without an audible seek.
   Future<void> setSpeed(double speed);
 
+  /// 0 (muted) to 1. Local only.
+  Future<void> setVolume(double volume);
+
   Duration get position;
 
   Stream<Duration> get positionStream;

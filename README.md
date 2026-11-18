@@ -66,11 +66,15 @@ Queue and Chat tabs are placeholders for the next steps.
 
 ## Music
 
-Music search and playback come from [Audius](https://audius.co), the open music platform. In a room, tap "Find music" to see trending tracks or search by name, then tap a track to play it. For now it plays only on your own device ("Preview mode"); syncing it for everyone in the room comes in the next step. On the web, tap "Tap to turn on sound" first: browsers block audio until you interact with the page.
+Music search and playback come from [Audius](https://audius.co), the open music platform. In a room, the host taps "Find music" to see trending tracks or search by name, then taps a track to play it for everyone. On the web, tap "Tap to turn on sound" first: browsers block audio until you interact with the page.
 
-Every track shows its artist, "Music via Audius" and an "Open on Audius" link to the track on audius.co. Tracks are streamed from Audius and never downloaded or stored.
+Every track shows its artist and "Music via Audius". Tracks are streamed from Audius and never downloaded or stored.
 
 The Audius read API needs no key. If you have a client-side Audius API key you can add it to `env.json` as `"AUDIUS_API_KEY"` (see `env.example.json`; leave it empty otherwise). It is sent only when set. Never put an Audius bearer token there.
+
+## How sync works
+
+The room's playback state is one database row: "at server time T the track was at position P and was playing or paused". Only the host can change it. Every device measures how far its own clock is from the server (five quick `server_now()` calls, keeping the fastest), so it can work out where the music should be right now, and it nudges its player there whenever it drifts by more than about a third of a second. Listeners can only mute locally; the host's play, pause, seek and track changes reach everyone within a second or so. Open "Sync debug" (always on in debug builds, or tap the room name five times) to see the measured clock offset, round trip and drift.
 
 ## Develop
 

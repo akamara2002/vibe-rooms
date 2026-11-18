@@ -1,269 +1,223 @@
-import 'dart:async';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart' hide EnginePhase;
 import 'package:material_ui/material_ui.dart';
-import 'package:vibe_rooms/features/player/domain/audio_engine.dart';
-import 'package:vibe_rooms/features/player/domain/track.dart';
+import 'package:vibe_rooms/features/player/domain/room_state.dart';
 import 'package:vibe_rooms/features/player/presentation/player_card.dart';
-import 'package:vibe_rooms/features/player/presentation/player_controller.dart';
 import 'package:vibe_rooms/features/player/presentation/player_providers.dart';
-import 'package:vibe_rooms/features/player/presentation/sound_gate.dart';
+import 'package:vibe_rooms/features/player/presentation/sync_providers.dart';
 
 import '../fakes/fakes.dart';
 
+RoomState _playing({int positionMs = 65000, bool playing = false}) =>
+    fakeRoomState(
+      trackId: 't1',
+      title: 'Midnight Drive',
+      artist: 'The Lanes',
+      durationMs: 200000,
+      isPlaying: playing,
+      positionMs: positionMs,
+      updatedAt: DateTime.now().toUtc(),
+    );
+
 class _Setup {
-  _Setup(this.tester, {this.web = false});
+  _Setup({RoomState? row, this.sound = true})
+    : repo = FakeRoomStateRepository(current: row ?? fakeRoomState()),
+      engine = FakeAudioEngine();
 
-  final WidgetTester tester;
-  final bool web;
-  final engine = FakeAudioEngine();
-  final catalog = FakeMusicCatalog(
-    trendingTracks: [fakeTrack(id: 'tr1', title: 'Trending One')],
-  );
-  late final ProviderContainer container;
+  final FakeRoomStateRepository repo;
+  final FakeAudioEngine engine;
+  final bool sound;
+}
 
-  Future<void> pump() async {
-    tester.view.physicalSize = const Size(900, 1600);
-    tester.view.devicePixelRatio = 2;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: container = ProviderContainer(
-          overrides: [
-            audioEngineFactoryProvider.overrideWithValue(() => engine),
-            musicCatalogProvider.overrideWithValue(catalog),
-            soundGateRequiredProvider.overrideWithValue(web),
-          ],
+Future<void> _pump(
+  WidgetTester tester,
+  _Setup setup, {
+  required bool isHost,
+}) async {
+  tester.view.physicalSize = const Size(900, 1600);
+  tester.view.devicePixelRatio = 2;
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        audioEngineFactoryProvider.overrideWithValue(() => setup.engine),
+        roomStateRepositoryProvider.overrideWithValue(setup.repo),
+        serverTimeSourceProvider.overrideWithValue(
+          FakeServerTimeSource(localNow: DateTime.now, rtt: Duration.zero),
         ),
-        child: const MaterialApp(
-          home: Scaffold(
-            body: SingleChildScrollView(
-              child: Column(children: [SoundGate(), PlayerCard()]),
-            ),
+        soundGateRequiredProvider.overrideWithValue(!setup.sound),
+        musicCatalogProvider.overrideWithValue(
+          FakeMusicCatalog(
+            trendingTracks: [fakeTrack(id: 'tr1', title: 'Trending One')],
+          ),
+        ),
+      ],
+      child: MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: PlayerCard(args: (roomId: 'room-1', isHost: isHost)),
           ),
         ),
       ),
-    );
-    addTearDown(container.dispose);
-    await tester.pump();
-  }
-
-  PlayerController get controller =>
-      container.read(playerControllerProvider.notifier);
-
-  Future<void> play(Track track) async {
-    await controller.playTrack(track);
-    await tester.pump();
-  }
+    ),
+  );
+  await tester.pump(const Duration(milliseconds: 50));
+  await tester.pump(const Duration(milliseconds: 600));
 }
 
-Finder _playButton() => find.byTooltip('Play');
-Finder _pauseButton() => find.byTooltip('Pause');
+Future<void> _leave(WidgetTester tester) async {
+  await tester.pumpWidget(const SizedBox());
+  await tester.pump();
+}
 
 void main() {
-  testWidgets(
-    'empty: "Nothing playing yet", Find music, preview caption, attribution',
-    (tester) async {
-      final s = _Setup(tester);
-      await s.pump();
-
-      expect(find.text('Now playing'), findsOneWidget);
-      expect(find.text('Nothing playing yet'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Find music'), findsOneWidget);
-      expect(find.text('Preview mode: not synced yet'), findsOneWidget);
-      expect(find.text('Music via Audius'), findsOneWidget);
-      expect(find.text('Open on Audius'), findsNothing); // nothing to link to
-      expect(find.byType(Slider), findsNothing);
-    },
-  );
-
-  testWidgets('Find music opens the search sheet; picking a track plays it', (
-    tester,
-  ) async {
-    final s = _Setup(tester);
-    await s.pump();
-
-    await tester.tap(find.text('Find music'));
-    await tester.pumpAndSettle();
-    expect(find.text('Trending One'), findsOneWidget);
-
-    await tester.tap(find.text('Trending One'));
-    await tester.pumpAndSettle();
-    expect(s.engine.calls, ['load:tr1', 'play']);
-    expect(find.text('Trending One'), findsOneWidget); // now on the card
-    expect(_pauseButton(), findsOneWidget);
-  });
-
-  testWidgets(
-    'loading: spinner in the button, play disabled, slider disabled',
-    (tester) async {
-      final s = _Setup(tester);
-      await s.pump();
-      s.engine.loadGate = Completer<void>();
-      // ignore: unawaited_futures
-      s.controller.playTrack(fakeTrack(title: 'Loading Song'));
-      await tester.pump();
-
-      expect(find.text('Loading Song'), findsOneWidget);
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      expect(
-        tester.widget<IconButton>(find.byType(IconButton).last).onPressed,
-        isNull,
-      );
-      expect(tester.widget<Slider>(find.byType(Slider)).onChanged, isNull);
-    },
-  );
-
-  testWidgets(
-    'playing: title, artist, times, pause button, advancing position',
-    (tester) async {
-      final s = _Setup(tester);
-      await s.pump();
-      await s.play(
-        fakeTrack(title: 'Hello Song', artist: 'Some Band', durationMs: 195000),
-      );
-
-      expect(find.text('Hello Song'), findsOneWidget);
-      expect(find.text('Some Band'), findsOneWidget);
-      expect(find.text('0:00'), findsOneWidget);
-      expect(find.text('3:15'), findsOneWidget);
-      expect(_pauseButton(), findsOneWidget);
-
-      s.engine.emitPosition(const Duration(seconds: 65));
-      await tester.pump();
-      expect(find.text('1:05'), findsOneWidget);
-    },
-  );
-
-  testWidgets('the play and pause button toggles playback', (tester) async {
-    final s = _Setup(tester);
-    await s.pump();
-    await s.play(fakeTrack());
-
-    await tester.tap(_pauseButton());
-    await tester.pump();
-    expect(s.engine.calls.last, 'pause');
-    expect(_playButton(), findsOneWidget);
-
-    await tester.tap(_playButton());
-    await tester.pump();
-    expect(s.engine.calls.last, 'play');
-  });
-
-  testWidgets('dragging the slider seeks on release', (tester) async {
-    final s = _Setup(tester);
-    await s.pump();
-    await s.play(fakeTrack(durationMs: 100000));
-    s.engine.emitDuration(const Duration(seconds: 100));
-    await tester.pump();
-
-    final slider = tester.getRect(find.byType(Slider));
-    await tester.tapAt(
-      Offset(slider.left + slider.width * 0.5, slider.center.dy),
-    );
-    await tester.pump();
-
-    final seeks = s.engine.calls.where((c) => c.startsWith('seek:')).toList();
-    expect(seeks, hasLength(1));
-    final ms = int.parse(seeks.single.substring(5));
-    expect(ms, inInclusiveRange(40000, 60000));
-  });
-
-  testWidgets('error: message and Retry, which reloads and plays', (
-    tester,
-  ) async {
-    final s = _Setup(tester);
-    await s.pump();
-    s.engine.failNextLoad = true;
-    await s.play(fakeTrack(title: 'Broken'));
-    await tester.pump();
-
-    expect(find.text(playbackErrorMessage), findsOneWidget);
-    expect(find.text('Retry'), findsOneWidget);
-
-    await tester.tap(find.text('Retry'));
-    await tester.pump();
-    await tester.pump();
-    expect(find.text(playbackErrorMessage), findsNothing);
-    expect(_pauseButton(), findsOneWidget);
-  });
-
-  testWidgets('shows "Open on Audius" only when the track has a permalink', (
-    tester,
-  ) async {
-    final s = _Setup(tester);
-    await s.pump();
-    await s.play(fakeTrack(permalinkUrl: 'https://audius.co/artist/song'));
-    expect(find.text('Open on Audius'), findsOneWidget);
-
-    await s.play(fakeTrack(id: 't2', title: 'No Link'));
-    expect(find.text('Open on Audius'), findsNothing);
-  });
-
-  group('sound gate (web mode)', () {
-    testWidgets(
-      'shows "Tap to turn on sound" and blocks playing until tapped',
-      (tester) async {
-        final s = _Setup(tester, web: true);
-        await s.pump();
-
-        expect(find.text('Tap to turn on sound'), findsOneWidget);
-
-        // Picking a track while sound is off is refused with a message.
-        await s.controller.playTrack(fakeTrack());
-        await tester.pump();
-        expect(s.engine.calls, isEmpty);
-        expect(find.text(soundOffMessage), findsOneWidget);
-
-        await tester.tap(find.text('Tap to turn on sound'));
-        await tester.pump();
-        expect(find.text('Tap to turn on sound'), findsNothing);
-
-        await s.play(fakeTrack());
-        await tester.pump();
-        expect(s.engine.calls, ['load:t1', 'play']);
-      },
-    );
-
-    testWidgets('the play button is disabled while sound is off', (
-      tester,
-    ) async {
-      final s = _Setup(tester, web: true);
-      await s.pump();
-      // A track somehow loaded (for example restored state): button stays off.
-      s.container.read(soundEnabledProvider.notifier).enable();
-      await s.play(fakeTrack());
-      s.container.read(soundGateRequiredProvider);
-      expect(
-        tester.widget<IconButton>(find.byType(IconButton).last).onPressed,
-        isNotNull,
-      );
+  group('empty room', () {
+    testWidgets('the host is invited to pick a song', (tester) async {
+      await _pump(tester, _Setup(), isHost: true);
+      expect(find.text('Pick a song to start the party'), findsOneWidget);
+      expect(find.text('Find music'), findsOneWidget);
+      await _leave(tester);
     });
 
-    testWidgets(
-      'a screen reader can turn sound on (the semantic button has a tap action)',
-      (tester) async {
-        final s = _Setup(tester, web: true);
-        await s.pump();
-        final handle = tester.ensureSemantics();
-
-        tester.semantics.tap(find.semantics.byLabel('Tap to turn on sound'));
-        await tester.pump();
-        expect(s.container.read(soundEnabledProvider), isTrue);
-        expect(find.text('Tap to turn on sound'), findsNothing);
-        handle.dispose();
-      },
-    );
+    testWidgets('a listener just waits', (tester) async {
+      await _pump(tester, _Setup(), isHost: false);
+      expect(find.text('Waiting for the host to pick a song'), findsOneWidget);
+      expect(find.text('Find music'), findsNothing);
+      await _leave(tester);
+    });
   });
 
-  testWidgets('no gate where none is needed (mobile)', (tester) async {
-    final s = _Setup(tester);
-    await s.pump();
-    expect(find.text('Tap to turn on sound'), findsNothing);
+  group('with a track', () {
+    testWidgets('everyone sees the same track from the room row', (
+      tester,
+    ) async {
+      for (final host in [true, false]) {
+        await _pump(tester, _Setup(row: _playing()), isHost: host);
+        expect(find.text('Midnight Drive'), findsOneWidget);
+        expect(find.text('The Lanes'), findsOneWidget);
+        expect(find.text('Music via Audius'), findsOneWidget);
+        // Elapsed time comes from the room position (paused at 1:05 of 3:20).
+        expect(find.text('1:05'), findsOneWidget);
+        expect(find.text('3:20'), findsOneWidget);
+        expect(find.textContaining('Preview mode'), findsNothing);
+        await _leave(tester);
+      }
+    });
+
+    testWidgets('the host has play/pause, a seek slider and Change track', (
+      tester,
+    ) async {
+      await _pump(tester, _Setup(row: _playing()), isHost: true);
+      expect(find.byTooltip('Play'), findsOneWidget);
+      expect(find.byType(Slider), findsOneWidget);
+      expect(find.text('Change track'), findsOneWidget);
+      expect(find.text('The host controls playback'), findsNothing);
+      await _leave(tester);
+    });
+
+    testWidgets('a listener has none of that, only a progress bar and Mute', (
+      tester,
+    ) async {
+      await _pump(tester, _Setup(row: _playing()), isHost: false);
+      expect(find.byTooltip('Play'), findsNothing);
+      expect(find.byTooltip('Pause'), findsNothing);
+      expect(find.byType(Slider), findsNothing);
+      expect(find.text('Change track'), findsNothing);
+      expect(find.byType(LinearProgressIndicator), findsOneWidget);
+      expect(find.text('The host controls playback'), findsOneWidget);
+      expect(find.byTooltip('Mute'), findsOneWidget);
+      await _leave(tester);
+    });
+
+    testWidgets('Mute toggles for a listener', (tester) async {
+      final setup = _Setup(row: _playing());
+      await _pump(tester, setup, isHost: false);
+      await tester.tap(find.byTooltip('Mute'));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byTooltip('Unmute'), findsOneWidget);
+      expect(setup.engine.volume, 0);
+      expect(setup.repo.writes, isEmpty);
+      await _leave(tester);
+    });
+
+    testWidgets('the host pause button writes to the room', (tester) async {
+      final setup = _Setup(row: _playing(playing: true));
+      await _pump(tester, setup, isHost: true);
+      await tester.tap(find.byTooltip('Pause'));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(setup.repo.writes.single['is_playing'], false);
+      expect(find.byTooltip('Play'), findsOneWidget);
+      await _leave(tester);
+    });
+
+    testWidgets('dragging the slider writes once, when the drag ends', (
+      tester,
+    ) async {
+      final setup = _Setup(row: _playing());
+      await _pump(tester, setup, isHost: true);
+      final slider = find.byType(Slider);
+      final gesture = await tester.startGesture(tester.getCenter(slider));
+      await gesture.moveBy(const Offset(40, 0));
+      await tester.pump();
+      await gesture.moveBy(const Offset(40, 0));
+      await tester.pump();
+      expect(setup.repo.writes, isEmpty);
+      await gesture.up();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(setup.repo.writes, hasLength(1));
+      expect(setup.repo.writes.single.keys.toSet(), {
+        'is_playing',
+        'position_ms',
+      });
+      await _leave(tester);
+    });
   });
 
-  test('formatDuration helper shape (smoke)', () {
-    expect(EnginePhase.values, contains(EnginePhase.completed));
+  group('the sync chip', () {
+    testWidgets('says Syncing... while playing without a loaded engine', (
+      tester,
+    ) async {
+      final setup = _Setup(row: _playing(playing: true));
+      setup.engine.loadGate = null;
+      await _pump(tester, setup, isHost: false);
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is Text && (w.data == 'Syncing...' || w.data == 'In sync'),
+        ),
+        findsOneWidget,
+      );
+      await _leave(tester);
+    });
+
+    testWidgets('Tap to turn on sound is also the sound gate', (tester) async {
+      final setup = _Setup(row: _playing(playing: true), sound: false);
+      await _pump(tester, setup, isHost: false);
+      expect(find.text('Tap to turn on sound'), findsOneWidget);
+      await tester.tap(find.text('Tap to turn on sound'));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.text('Tap to turn on sound'), findsNothing);
+      await _leave(tester);
+    });
+
+    testWidgets('says Ended at the end of the track', (tester) async {
+      await _pump(
+        tester,
+        _Setup(row: _playing(positionMs: 200000)),
+        isHost: false,
+      );
+      expect(find.text('Ended'), findsOneWidget);
+      await _leave(tester);
+    });
+
+    testWidgets('says Reconnecting... when the connection drops', (
+      tester,
+    ) async {
+      final setup = _Setup(row: _playing());
+      await _pump(tester, setup, isHost: false);
+      setup.repo.emitError();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.text('Reconnecting...'), findsOneWidget);
+      await _leave(tester);
+    });
   });
 }

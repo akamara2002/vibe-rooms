@@ -169,7 +169,7 @@ void main() {
       auth.setSignedIn(true);
       await tester.pumpAndSettle();
       expect(find.text('Deep Room'), findsOneWidget); // back in the room
-      expect(find.text('Nothing playing yet'), findsOneWidget);
+      expect(find.text('Pick a song to start the party'), findsOneWidget);
     });
 
     testWidgets('a join link signed out joins after sign-in', (tester) async {

@@ -53,7 +53,7 @@ void main() {
     expect(find.byTooltip('Copy code'), findsOneWidget);
     expect(find.text('Copy invite'), findsOneWidget);
     expect(find.text('Now playing'), findsOneWidget);
-    expect(find.text('Nothing playing yet'), findsOneWidget);
+    expect(find.text('Pick a song to start the party'), findsOneWidget);
     expect(find.text('Listeners (3)'), findsOneWidget);
     expect(find.text('Queue'), findsOneWidget);
     expect(find.text('Chat'), findsOneWidget);
@@ -118,7 +118,7 @@ void main() {
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(repo.calls, isEmpty);
-    expect(find.text('Nothing playing yet'), findsOneWidget);
+    expect(find.text('Waiting for the host to pick a song'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Room menu'));
     await tester.pumpAndSettle();
@@ -209,7 +209,7 @@ void main() {
     tester.view.physicalSize = const Size(2200, 1200);
     await tester.pumpAndSettle();
     expect(find.text('Listeners (3)'), findsOneWidget);
-    expect(find.text('Nothing playing yet'), findsOneWidget);
+    expect(find.text('Pick a song to start the party'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -228,7 +228,8 @@ void main() {
   });
 
   testWidgets(
-    'the room screen has the player card, and on web the sound gate',
+    'the host picks a track: the room row is written, the engine follows, '
+    'and leaving the room stops the audio',
     (tester) async {
       final repo = FakeRoomRepository(
         roomsById: {'room-1': fakeRoom(name: 'Friday Vibes')},
@@ -237,6 +238,7 @@ void main() {
         },
       );
       final engine = FakeAudioEngine();
+      final roomState = FakeRoomStateRepository(current: fakeRoomState());
       final catalog = FakeMusicCatalog(
         trendingTracks: [fakeTrack(id: 'tr1', title: 'Trending One')],
       );
@@ -246,29 +248,68 @@ void main() {
         rooms: repo,
         engine: engine,
         catalog: catalog,
+        roomState: roomState,
         soundGate: true,
       );
       GoRouter.of(tester.element(find.byType(HomeScreen))).go('/room/room-1');
       await tester.pumpAndSettle();
 
       expect(find.text('Tap to turn on sound'), findsOneWidget);
-      expect(find.text('Nothing playing yet'), findsOneWidget);
-      expect(find.text('Preview mode: not synced yet'), findsOneWidget);
-
-      await tester.tap(find.text('Tap to turn on sound'));
-      await tester.pumpAndSettle();
-      expect(find.text('Tap to turn on sound'), findsNothing);
+      expect(find.text('Pick a song to start the party'), findsOneWidget);
+      expect(find.text('Preview mode: not synced yet'), findsNothing);
 
       await tester.tap(find.text('Find music'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Trending One'));
       await tester.pumpAndSettle();
-      expect(engine.calls, ['load:tr1', 'play']);
+
+      // Picking a track is a tap, so sound is on, and the row was written.
+      expect(find.text('Tap to turn on sound'), findsNothing);
+      expect(roomState.writes, hasLength(1));
+      expect(roomState.writes.single['track_id'], 'tr1');
+      expect(roomState.writes.single['is_playing'], true);
+      expect(roomState.writes.single.containsKey('updated_at'), isFalse);
+      expect(engine.calls, contains('load:tr1'));
+      expect(find.text('Trending One'), findsOneWidget);
 
       // Leaving the room disposes the player and so stops the audio.
       await tester.tap(find.byTooltip('Back to home'));
       await tester.pumpAndSettle();
       expect(engine.disposed, isTrue);
+      expect(roomState.cancelCount, greaterThan(0));
     },
   );
+
+  testWidgets('the sync debug panel is hidden until the room name is tapped '
+      'five times', (tester) async {
+    final repo = FakeRoomRepository(
+      roomsById: {'room-1': fakeRoom(name: 'Friday Vibes')},
+      members: {
+        'room-1': [fakeMember('user-1', 'Ana', isHost: true)],
+      },
+    );
+    await pumpApp(
+      tester,
+      auth: FakeAuthRepository(signedIn: true),
+      rooms: repo,
+      debugPanel: false,
+    );
+    GoRouter.of(tester.element(find.byType(HomeScreen))).go('/room/room-1');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Sync debug'), findsNothing);
+    for (var i = 0; i < 4; i++) {
+      await tester.tap(find.text('Friday Vibes'));
+      await tester.pump();
+    }
+    expect(find.text('Sync debug'), findsNothing);
+    await tester.tap(find.text('Friday Vibes'));
+    await tester.pumpAndSettle();
+    expect(find.text('Sync debug'), findsOneWidget);
+
+    await tester.tap(find.text('Sync debug'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Server offset'), findsOneWidget);
+    expect(find.textContaining('Last action'), findsOneWidget);
+  });
 }

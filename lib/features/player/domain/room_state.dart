@@ -60,6 +60,29 @@ class RoomState {
     return position;
   }
 
+  RoomState copyWith({
+    bool? isPlaying,
+    int? positionMs,
+    DateTime? updatedAt,
+    String? trackId,
+    String? title,
+    String? artist,
+    String? artworkUrl,
+    int? durationMs,
+  }) => RoomState(
+    roomId: roomId,
+    queueItemId: queueItemId,
+    trackId: trackId ?? this.trackId,
+    title: title ?? this.title,
+    artist: artist ?? this.artist,
+    artworkUrl: artworkUrl ?? this.artworkUrl,
+    durationMs: durationMs ?? this.durationMs,
+    isPlaying: isPlaying ?? this.isPlaying,
+    positionMs: positionMs ?? this.positionMs,
+    updatedAt: updatedAt ?? this.updatedAt,
+    updatedBy: updatedBy,
+  );
+
   /// The full row (for tests and caching). Do not send this to the server.
   Map<String, dynamic> toJson() => {
     'room_id': roomId,

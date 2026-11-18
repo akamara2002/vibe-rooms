@@ -1,46 +1,48 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:url_launcher/url_launcher.dart';
 
-import '../domain/audio_engine.dart';
-import '../domain/player_state.dart';
+import '../domain/sync_status.dart';
 import 'artwork.dart';
 import 'format_duration.dart';
-import 'player_controller.dart';
 import 'player_providers.dart';
+import 'sync_controller.dart';
+import 'sync_providers.dart';
 import 'track_search_sheet.dart';
 
-/// The "Now playing" card: artwork, title, progress, play/pause, errors.
-/// Local playback only for now (see the "Preview mode" caption).
+/// The room's "Now playing" card. Everyone sees the same track and position
+/// (they come from the room's playback row); only the host has transport
+/// controls.
 class PlayerCard extends ConsumerStatefulWidget {
-  const PlayerCard({super.key});
+  const PlayerCard({super.key, required this.args});
+
+  final SyncArgs args;
 
   @override
   ConsumerState<PlayerCard> createState() => _PlayerCardState();
 }
 
 class _PlayerCardState extends ConsumerState<PlayerCard> {
-  /// The slider value while the thumb is being dragged (milliseconds).
+  /// The slider value while the host drags it (milliseconds).
   double? _dragMs;
-
-  Future<void> _openOnAudius(String url) async {
-    final uri = Uri.tryParse(url);
-    // Only ever open the audius.co page of the track.
-    if (uri == null || uri.scheme != 'https' || uri.host != 'audius.co') return;
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
-  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final player = ref.watch(playerControllerProvider);
-    final soundOn = ref.watch(soundEnabledProvider);
-    final controller = ref.read(playerControllerProvider.notifier);
-    final track = player.track;
+    final sync = ref.watch(syncControllerProvider(widget.args));
+    final controller = ref.read(syncControllerProvider(widget.args).notifier);
+    final isHost = widget.args.isHost;
+    final room = sync.room;
+    final hasTrack = sync.hasTrack;
 
-    void findMusic() =>
-        showTrackSearchSheet(context, onTrackSelected: controller.playTrack);
+    void findMusic() {
+      // Picking a track is a tap, so it also unlocks sound on the web.
+      showTrackSearchSheet(
+        context,
+        title: 'Pick a song',
+        onTrackSelected: controller.hostSetTrack,
+      );
+    }
 
     return Card(
       margin: EdgeInsets.zero,
@@ -49,27 +51,34 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Now playing',
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Now playing',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                if (hasTrack) _SyncChip(status: sync.status),
+              ],
             ),
             const SizedBox(height: 12),
-            if (track == null)
-              _EmptyPlayer(onFindMusic: findMusic)
+            if (!hasTrack)
+              _EmptyPlayer(isHost: isHost, onFindMusic: findMusic)
             else ...[
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Artwork(url: track.artworkUrl, size: 88, radius: 18),
+                  Artwork(url: room!.artworkUrl, size: 88, radius: 18),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          track.title,
+                          room.title ?? 'Untitled',
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.titleLarge?.copyWith(
@@ -78,17 +87,18 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          track.artist,
+                          room.artist ?? '',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: scheme.onSurfaceVariant,
                           ),
                         ),
-                        TextButton(
-                          onPressed: findMusic,
-                          child: const Text('Change track'),
-                        ),
+                        if (isHost)
+                          TextButton(
+                            onPressed: findMusic,
+                            child: const Text('Change track'),
+                          ),
                       ],
                     ),
                   ),
@@ -96,58 +106,56 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
               ),
               const SizedBox(height: 12),
               _Progress(
-                player: player,
+                positionMs: sync.position.inMilliseconds,
+                durationMs: room.durationMs ?? 0,
                 dragMs: _dragMs,
+                editable: isHost,
                 onDrag: (value) => setState(() => _dragMs = value),
                 onDragEnd: (value) {
                   setState(() => _dragMs = null);
-                  controller.seek(Duration(milliseconds: value.round()));
+                  controller.hostSeek(Duration(milliseconds: value.round()));
                 },
               ),
               const SizedBox(height: 4),
-              Center(
-                child: _PlayButton(
-                  player: player,
-                  enabled: soundOn,
-                  onPressed: controller.togglePlay,
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (isHost)
+                    _PlayButton(
+                      playing: room.isPlaying,
+                      onPressed: controller.hostTogglePlay,
+                    ),
+                  if (isHost) const SizedBox(width: 12),
+                  _MuteButton(
+                    muted: sync.muted,
+                    onPressed: controller.toggleMute,
+                  ),
+                ],
               ),
+              if (!isHost) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'The host controls playback',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
             ],
-            if (player.errorMessage != null) ...[
+            if (sync.errorMessage != null) ...[
               const SizedBox(height: 12),
               _ErrorRow(
-                message: player.errorMessage!,
-                onRetry: track != null && player.phase == EnginePhase.error
-                    ? controller.retry
-                    : null,
+                message: sync.errorMessage!,
+                onDismiss: controller.clearError,
               ),
             ],
             const SizedBox(height: 12),
             Text(
-              'Preview mode: not synced yet',
+              'Music via Audius',
               style: theme.textTheme.labelSmall?.copyWith(
                 color: scheme.onSurfaceVariant,
-                fontStyle: FontStyle.italic,
               ),
-            ),
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Music via Audius',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-                if (track?.permalinkUrl != null)
-                  TextButton.icon(
-                    onPressed: () => _openOnAudius(track!.permalinkUrl!),
-                    icon: const Icon(Icons.open_in_new, size: 16),
-                    label: const Text('Open on Audius'),
-                  ),
-              ],
             ),
           ],
         ),
@@ -156,9 +164,61 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   }
 }
 
-class _EmptyPlayer extends StatelessWidget {
-  const _EmptyPlayer({required this.onFindMusic});
+class _SyncChip extends ConsumerWidget {
+  const _SyncChip({required this.status});
 
+  final SyncStatus status;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final (label, icon, color) = switch (status) {
+      SyncStatus.inSync => ('In sync', Icons.check_circle, scheme.primary),
+      SyncStatus.syncing => ('Syncing...', Icons.sync, scheme.tertiary),
+      SyncStatus.reconnecting => (
+        'Reconnecting...',
+        Icons.wifi_off,
+        scheme.error,
+      ),
+      SyncStatus.waitingForSound => (
+        'Tap to turn on sound',
+        Icons.volume_up,
+        scheme.primary,
+      ),
+      SyncStatus.ended => ('Ended', Icons.stop_circle_outlined, scheme.outline),
+    };
+    final chip = Chip(
+      avatar: Icon(icon, size: 18, color: color),
+      label: Text(label),
+      visualDensity: VisualDensity.compact,
+    );
+    if (status != SyncStatus.waitingForSound) {
+      return Semantics(
+        label: label,
+        child: ExcludeSemantics(child: chip),
+      );
+    }
+    // The chip doubles as the web sound gate.
+    void enable() => ref.read(soundEnabledProvider.notifier).enable();
+    return Semantics(
+      button: true,
+      label: label,
+      onTap: enable,
+      child: ExcludeSemantics(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: enable,
+          child: chip,
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyPlayer extends StatelessWidget {
+  const _EmptyPlayer({required this.isHost, required this.onFindMusic});
+
+  final bool isHost;
   final VoidCallback onFindMusic;
 
   @override
@@ -182,7 +242,9 @@ class _EmptyPlayer extends StatelessWidget {
             const SizedBox(width: 16),
             Expanded(
               child: Text(
-                'Nothing playing yet',
+                isHost
+                    ? 'Pick a song to start the party'
+                    : 'Waiting for the host to pick a song',
                 style: theme.textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.w600,
                 ),
@@ -190,12 +252,14 @@ class _EmptyPlayer extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 16),
-        FilledButton.icon(
-          onPressed: onFindMusic,
-          icon: const Icon(Icons.search),
-          label: const Text('Find music'),
-        ),
+        if (isHost) ...[
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: onFindMusic,
+            icon: const Icon(Icons.search),
+            label: const Text('Find music'),
+          ),
+        ],
       ],
     );
   }
@@ -203,54 +267,64 @@ class _EmptyPlayer extends StatelessWidget {
 
 class _Progress extends StatelessWidget {
   const _Progress({
-    required this.player,
+    required this.positionMs,
+    required this.durationMs,
     required this.dragMs,
+    required this.editable,
     required this.onDrag,
     required this.onDragEnd,
   });
 
-  final PlayerState player;
+  final int positionMs;
+  final int durationMs;
   final double? dragMs;
+  final bool editable;
   final ValueChanged<double> onDrag;
   final ValueChanged<double> onDragEnd;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final total = player.duration ?? player.track?.duration ?? Duration.zero;
-    final maxMs = total.inMilliseconds.toDouble();
-    final seekable =
-        maxMs > 0 &&
-        const {
-          EnginePhase.ready,
-          EnginePhase.playing,
-          EnginePhase.paused,
-          EnginePhase.buffering,
-          EnginePhase.completed,
-        }.contains(player.phase);
-    final valueMs = (dragMs ?? player.position.inMilliseconds.toDouble()).clamp(
-      0.0,
-      maxMs <= 0 ? 1.0 : maxMs,
-    );
+    final maxMs = durationMs > 0 ? durationMs.toDouble() : 1.0;
+    final valueMs = (dragMs ?? positionMs.toDouble()).clamp(0.0, maxMs);
+    final total = Duration(milliseconds: durationMs);
     final elapsed = Duration(milliseconds: valueMs.round());
     final style = theme.textTheme.labelSmall?.copyWith(
       color: theme.colorScheme.onSurfaceVariant,
       fontFeatures: const [FontFeature.tabularFigures()],
     );
+    final label = '${formatDuration(elapsed)} of ${formatDuration(total)}';
 
     return Column(
       children: [
-        SliderTheme(
-          data: SliderTheme.of(context).copyWith(trackHeight: 4),
-          child: Slider(
-            value: valueMs,
-            max: maxMs <= 0 ? 1.0 : maxMs,
-            onChanged: seekable ? onDrag : null,
-            onChangeEnd: seekable ? onDragEnd : null,
-            semanticFormatterCallback: (v) =>
-                '${formatDuration(Duration(milliseconds: v.round()))} of ${formatDuration(total)}',
+        if (editable)
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(trackHeight: 4),
+            child: Slider(
+              value: valueMs,
+              max: maxMs,
+              onChanged: durationMs > 0 ? onDrag : null,
+              // Only the end of the drag is written to the room.
+              onChangeEnd: durationMs > 0 ? onDragEnd : null,
+              semanticFormatterCallback: (_) => label,
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
+            child: Semantics(
+              label: 'Progress $label',
+              child: ExcludeSemantics(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: valueMs / maxMs,
+                    minHeight: 4,
+                  ),
+                ),
+              ),
+            ),
           ),
-        ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
@@ -267,43 +341,44 @@ class _Progress extends StatelessWidget {
 }
 
 class _PlayButton extends StatelessWidget {
-  const _PlayButton({
-    required this.player,
-    required this.enabled,
-    required this.onPressed,
-  });
+  const _PlayButton({required this.playing, required this.onPressed});
 
-  final PlayerState player;
-  final bool enabled;
+  final bool playing;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    final busy =
-        player.phase == EnginePhase.loading ||
-        player.phase == EnginePhase.buffering;
-    final playing = player.phase == EnginePhase.playing;
     return IconButton.filled(
       tooltip: playing ? 'Pause' : 'Play',
       style: IconButton.styleFrom(minimumSize: const Size(64, 64)),
       iconSize: 32,
-      onPressed: enabled && !busy ? onPressed : null,
-      icon: busy
-          ? const SizedBox(
-              width: 28,
-              height: 28,
-              child: CircularProgressIndicator(strokeWidth: 3),
-            )
-          : Icon(playing ? Icons.pause : Icons.play_arrow),
+      onPressed: onPressed,
+      icon: Icon(playing ? Icons.pause : Icons.play_arrow),
+    );
+  }
+}
+
+class _MuteButton extends StatelessWidget {
+  const _MuteButton({required this.muted, required this.onPressed});
+
+  final bool muted;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton.outlined(
+      tooltip: muted ? 'Unmute' : 'Mute',
+      onPressed: onPressed,
+      icon: Icon(muted ? Icons.volume_off : Icons.volume_up),
     );
   }
 }
 
 class _ErrorRow extends StatelessWidget {
-  const _ErrorRow({required this.message, required this.onRetry});
+  const _ErrorRow({required this.message, required this.onDismiss});
 
   final String message;
-  final VoidCallback? onRetry;
+  final VoidCallback onDismiss;
 
   @override
   Widget build(BuildContext context) {
@@ -324,8 +399,11 @@ class _ErrorRow extends StatelessWidget {
               style: TextStyle(color: scheme.onErrorContainer),
             ),
           ),
-          if (onRetry != null)
-            TextButton(onPressed: onRetry, child: const Text('Retry')),
+          IconButton(
+            tooltip: 'Dismiss',
+            onPressed: onDismiss,
+            icon: Icon(Icons.close, color: scheme.onErrorContainer),
+          ),
         ],
       ),
     );

@@ -13,8 +13,11 @@ import 'package:vibe_rooms/features/auth/presentation/auth_providers.dart';
 import 'package:vibe_rooms/features/player/domain/audio_engine.dart';
 import 'package:vibe_rooms/features/player/domain/audius_failure.dart';
 import 'package:vibe_rooms/features/player/domain/music_catalog.dart';
+import 'package:vibe_rooms/features/player/domain/room_state.dart';
+import 'package:vibe_rooms/features/player/domain/room_state_repository.dart';
 import 'package:vibe_rooms/features/player/domain/track.dart';
 import 'package:vibe_rooms/features/player/presentation/player_providers.dart';
+import 'package:vibe_rooms/features/player/presentation/sync_providers.dart';
 import 'package:vibe_rooms/features/rooms/domain/room.dart';
 import 'package:vibe_rooms/features/rooms/domain/room_failure.dart';
 import 'package:vibe_rooms/features/rooms/domain/room_member.dart';
@@ -236,6 +239,9 @@ Track fakeTrack({
 );
 
 /// An [AudioEngine] driven by the test. No audio, no plugins.
+///
+/// With [clock] set, the position advances while playing, like a real engine.
+/// [loadDelay] and [seekDelay] make loads and seeks take time.
 class FakeAudioEngine implements AudioEngine {
   final calls = <String>[];
   final _phases = StreamController<EnginePhase>.broadcast();
@@ -244,12 +250,21 @@ class FakeAudioEngine implements AudioEngine {
 
   EnginePhase _phase = EnginePhase.idle;
   Duration _position = Duration.zero;
+  DateTime? _playingSince;
   Duration? _duration;
   int _generation = 0;
+
+  DateTime Function()? clock;
+  Duration loadDelay = Duration.zero;
+  Duration seekDelay = Duration.zero;
 
   Uri? loadedUrl;
   Duration? loadedInitialPosition;
   bool disposed = false;
+
+  /// Operations running right now, and the most that ever ran at once.
+  int inFlight = 0;
+  int maxInFlight = 0;
 
   /// While set, load() waits for it (to test cancellation).
   Completer<void>? loadGate;
@@ -257,13 +272,29 @@ class FakeAudioEngine implements AudioEngine {
   /// If true, the next load() ends in the error phase.
   bool failNextLoad = false;
 
+  Future<void> _op(Future<void> Function() body) async {
+    inFlight++;
+    if (inFlight > maxInFlight) maxInFlight = inFlight;
+    try {
+      await body();
+    } finally {
+      inFlight--;
+    }
+  }
+
   void emitPhase(EnginePhase phase) {
+    final now = clock?.call();
+    if (_phase == EnginePhase.playing && now != null && _playingSince != null) {
+      _position += now.difference(_playingSince!);
+    }
     _phase = phase;
+    _playingSince = phase == EnginePhase.playing ? now : null;
     _phases.add(phase);
   }
 
   void emitPosition(Duration position) {
     _position = position;
+    if (_phase == EnginePhase.playing) _playingSince = clock?.call();
     _positions.add(position);
   }
 
@@ -273,15 +304,17 @@ class FakeAudioEngine implements AudioEngine {
   }
 
   @override
-  Future<void> load(Uri url, {Duration? initialPosition}) async {
+  Future<void> load(Uri url, {Duration? initialPosition}) => _op(() async {
     calls.add(
       'load:${url.pathSegments.length > 2 ? url.pathSegments[2] : url}',
     );
     final generation = ++_generation;
     loadedUrl = url;
     loadedInitialPosition = initialPosition;
+    _position = Duration.zero;
     emitPhase(EnginePhase.loading);
     if (loadGate != null) await loadGate!.future;
+    if (loadDelay > Duration.zero) await Future<void>.delayed(loadDelay);
     if (generation != _generation || disposed) return;
     if (failNextLoad) {
       failNextLoad = false;
@@ -289,7 +322,7 @@ class FakeAudioEngine implements AudioEngine {
       return;
     }
     emitPhase(EnginePhase.ready);
-  }
+  });
 
   @override
   Future<void> play() async {
@@ -298,11 +331,12 @@ class FakeAudioEngine implements AudioEngine {
   }
 
   @override
-  Future<void> playFrom(Duration position) async {
+  Future<void> playFrom(Duration position) => _op(() async {
     calls.add('playFrom:${position.inMilliseconds}');
+    if (seekDelay > Duration.zero) await Future<void>.delayed(seekDelay);
     emitPosition(position);
     emitPhase(EnginePhase.playing);
-  }
+  });
 
   @override
   Future<void> pause() async {
@@ -311,16 +345,32 @@ class FakeAudioEngine implements AudioEngine {
   }
 
   @override
-  Future<void> seek(Duration position) async {
+  Future<void> seek(Duration position) => _op(() async {
     calls.add('seek:${position.inMilliseconds}');
+    if (seekDelay > Duration.zero) await Future<void>.delayed(seekDelay);
     emitPosition(position);
-  }
+  });
 
   @override
   Future<void> setSpeed(double speed) async => calls.add('speed:$speed');
 
+  double volume = 1;
+
   @override
-  Duration get position => _position;
+  Future<void> setVolume(double volume) async {
+    this.volume = volume;
+    calls.add('volume:$volume');
+  }
+
+  @override
+  Duration get position {
+    final now = clock?.call();
+    if (_phase == EnginePhase.playing && now != null && _playingSince != null) {
+      return _position + now.difference(_playingSince!);
+    }
+    return _position;
+  }
+
   @override
   Stream<Duration> get positionStream => _positions.stream;
   @override
@@ -378,6 +428,127 @@ class FakeMusicCatalog implements MusicCatalog {
       Uri.parse('https://audio.test/v1/tracks/$trackId/stream');
 }
 
+/// A playback row. Defaults to a room with no track.
+RoomState fakeRoomState({
+  String roomId = 'room-1',
+  String? trackId,
+  String? title,
+  String? artist,
+  int? durationMs,
+  bool isPlaying = false,
+  int positionMs = 0,
+  DateTime? updatedAt,
+}) => RoomState(
+  roomId: roomId,
+  trackId: trackId,
+  title: title,
+  artist: artist,
+  durationMs: durationMs,
+  isPlaying: isPlaying,
+  positionMs: positionMs,
+  updatedAt: updatedAt ?? DateTime.utc(2026, 11, 18, 12),
+);
+
+/// An in-memory [RoomStateRepository]. The test plays the server: it emits
+/// rows, and (with [autoEcho]) turns each host write into a new row stamped
+/// with [serverNow].
+class FakeRoomStateRepository implements RoomStateRepository {
+  FakeRoomStateRepository({this.current, DateTime Function()? serverNow})
+    : serverNow = serverNow ?? (() => DateTime.now().toUtc());
+
+  RoomState? current;
+  DateTime Function() serverNow;
+  final _controller = StreamController<RoomState>.broadcast();
+  final writes = <Map<String, dynamic>>[];
+  int watchCount = 0;
+  int cancelCount = 0;
+  bool autoEcho = true;
+
+  /// If set, the next write fails with this.
+  RoomStateFailure? failNext;
+
+  void emit(RoomState state) {
+    current = state;
+    _controller.add(state);
+  }
+
+  void emitError() => _controller.addError(
+    const RoomStateFailure(RoomStateFailureKind.network),
+  );
+
+  @override
+  Future<RoomState?> get(String roomId) async => current;
+
+  @override
+  Stream<RoomState> watch(String roomId) {
+    watchCount++;
+    late final StreamController<RoomState> out;
+    StreamSubscription<RoomState>? sub;
+    out = StreamController<RoomState>(
+      onListen: () {
+        final now = current;
+        if (now != null) out.add(now);
+        sub = _controller.stream.listen(out.add, onError: out.addError);
+      },
+      onCancel: () {
+        cancelCount++;
+        return sub?.cancel();
+      },
+    );
+    return out.stream;
+  }
+
+  @override
+  Future<void> hostUpdate(String roomId, RoomStateUpdate update) async {
+    final failure = failNext;
+    if (failure != null) {
+      failNext = null;
+      throw failure;
+    }
+    final json = update.toJson();
+    writes.add(json);
+    final row = current;
+    if (!autoEcho || row == null) return;
+    emit(
+      RoomState.fromJson({
+        ...row.toJson(),
+        ...json,
+        'updated_at': serverNow().toUtc().toIso8601String(),
+      }),
+    );
+  }
+}
+
+/// A server clock for tests: `server_now()` answers after [rtt] / 2 each way.
+class FakeServerTimeSource implements ServerTimeSource {
+  FakeServerTimeSource({
+    required this.localNow,
+    this.skew = Duration.zero,
+    this.rtt = const Duration(milliseconds: 40),
+  });
+
+  /// The (fake) device clock.
+  final DateTime Function() localNow;
+
+  /// Server time minus device time.
+  Duration skew;
+  Duration rtt;
+  int calls = 0;
+  bool failing = false;
+
+  DateTime get serverTime => localNow().toUtc().add(skew);
+
+  @override
+  Future<DateTime> serverNow() async {
+    calls++;
+    await Future<void>.delayed(rtt ~/ 2);
+    if (failing) throw StateError('offline');
+    final answer = serverTime;
+    await Future<void>.delayed(rtt ~/ 2);
+    return answer;
+  }
+}
+
 /// Pumps the whole app on a phone-sized surface with the given fakes.
 Future<void> pumpApp(
   WidgetTester tester, {
@@ -387,6 +558,8 @@ Future<void> pumpApp(
   FakeRoomPresence? presence,
   FakeAudioEngine? engine,
   FakeMusicCatalog? catalog,
+  FakeRoomStateRepository? roomState,
+  bool debugPanel = true,
   bool soundGate = false,
   bool ready = true,
 }) async {
@@ -409,6 +582,13 @@ Future<void> pumpApp(
         ),
         musicCatalogProvider.overrideWithValue(catalog ?? FakeMusicCatalog()),
         soundGateRequiredProvider.overrideWithValue(soundGate),
+        debugPanelDefaultProvider.overrideWithValue(debugPanel),
+        roomStateRepositoryProvider.overrideWithValue(
+          roomState ?? FakeRoomStateRepository(),
+        ),
+        serverTimeSourceProvider.overrideWithValue(
+          FakeServerTimeSource(localNow: DateTime.now, rtt: Duration.zero),
+        ),
       ],
       child: const VibeRoomsApp(),
     ),

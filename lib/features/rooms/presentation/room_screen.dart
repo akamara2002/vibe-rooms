@@ -7,6 +7,8 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/widgets/gradient_background.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../../player/presentation/player_card.dart';
+import '../../player/presentation/sync_controller.dart';
+import '../../player/presentation/sync_providers.dart';
 import '../../player/presentation/sound_gate.dart';
 import '../domain/room.dart';
 import '../domain/room_code.dart';
@@ -127,19 +129,37 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
   }
 }
 
-class _RoomView extends ConsumerWidget {
+class _RoomView extends ConsumerStatefulWidget {
   const _RoomView({required this.room, required this.onLeave});
 
   final Room room;
   final Future<void> Function(Room room, {required bool isHost}) onLeave;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_RoomView> createState() => _RoomViewState();
+}
+
+class _RoomViewState extends ConsumerState<_RoomView> {
+  /// Five taps on the room name show the sync debug panel (it is always shown
+  /// in debug builds).
+  int _titleTaps = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final room = widget.room;
+    final onLeave = widget.onLeave;
     final myId = ref.read(authRepositoryProvider).userId;
     final isHost = room.hostId == myId;
+    final args = (roomId: room.id, isHost: isHost);
     final members = ref.watch(roomMembersProvider(room.id)).value ?? const [];
     final online =
         ref.watch(onlineUsersProvider(room.id)).value ?? const <String>{};
+    // Watching a slice keeps the sync controller (and its engine) alive for the
+    // whole visit without rebuilding the screen on every tick.
+    final playing = ref.watch(
+      syncControllerProvider(args).select((s) => s.room?.isPlaying ?? false),
+    );
+    final showDebug = ref.watch(debugPanelDefaultProvider) || _titleTaps >= 5;
 
     return GradientBackground(
       child: Scaffold(
@@ -151,7 +171,15 @@ class _RoomView extends ConsumerWidget {
             icon: const Icon(Icons.arrow_back),
             onPressed: () => context.go('/home'),
           ),
-          title: Text(room.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+          title: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() => _titleTaps++),
+            child: Text(
+              room.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
           actions: [
             PopupMenuButton<String>(
               tooltip: 'Room menu',
@@ -177,10 +205,14 @@ class _RoomView extends ConsumerWidget {
                   children: [
                     _CodeHeader(room: room),
                     const SizedBox(height: 16),
-                    const SoundGate(),
+                    SoundGate(
+                      message: playing
+                          ? 'Music is playing. Tap to join in'
+                          : 'Tap to turn on sound',
+                    ),
                     LayoutBuilder(
                       builder: (context, constraints) {
-                        const nowPlaying = PlayerCard();
+                        final nowPlaying = PlayerCard(args: args);
                         final listeners = _Listeners(
                           members: members,
                           online: online,
@@ -190,7 +222,7 @@ class _RoomView extends ConsumerWidget {
                           return Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Expanded(flex: 3, child: nowPlaying),
+                              Expanded(flex: 3, child: nowPlaying),
                               const SizedBox(width: 16),
                               Expanded(flex: 2, child: listeners),
                             ],
@@ -206,6 +238,10 @@ class _RoomView extends ConsumerWidget {
                         );
                       },
                     ),
+                    if (showDebug) ...[
+                      const SizedBox(height: 16),
+                      _SyncDebugPanel(args: args),
+                    ],
                     const SizedBox(height: 24),
                     const _Tabs(),
                   ],
@@ -481,6 +517,38 @@ class _Tabs extends StatelessWidget {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Collapsible sync internals: for debugging only.
+class _SyncDebugPanel extends ConsumerWidget {
+  const _SyncDebugPanel({required this.args});
+
+  final SyncArgs args;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final sync = ref.watch(syncControllerProvider(args));
+    final d = sync.debug;
+    String ms(int? value) => value == null ? 'n/a' : '$value ms';
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ExpansionTile(
+        title: const Text('Sync debug'),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        expandedAlignment: Alignment.centerLeft,
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Status: ${sync.status.name}'),
+          Text('Server offset: ${ms(d.offsetMs)}'),
+          Text('Round trip: ${ms(d.rttMs)}'),
+          Text('Last drift: ${ms(d.driftMs)}'),
+          Text('Last action: ${d.lastAction}'),
+          Text('Track loaded: ${d.loadedTrack}'),
+          Text('Host: ${args.isHost}'),
         ],
       ),
     );

@@ -8,8 +8,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 ///    their listeners to the channel built here, BEFORE it is subscribed.
 ///  * A channel instance can be subscribed only once, and `channel()` does not
 ///    de-duplicate by topic, so never create two channels for one topic.
-///  * Postgres Changes use their own topic (see [membersTopic]) so they never
-///    collide with the presence channel.
+///  * Postgres Changes use their own topic (see [membersTopic], and
+///    `room_state:<roomId>` for the playback row) so they never collide with
+///    the presence channel.
 ///  * The channel is public (no RLS on Realtime messages), so it must carry
 ///    nothing private. Release it with `removeChannel` when done.
 class RoomChannel {

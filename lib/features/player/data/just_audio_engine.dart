@@ -143,6 +143,12 @@ class JustAudioEngine implements AudioEngine {
   }
 
   @override
+  Future<void> setVolume(double volume) async {
+    if (_disposed) return;
+    await _player.setVolume(volume.clamp(0.0, 1.0));
+  }
+
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;

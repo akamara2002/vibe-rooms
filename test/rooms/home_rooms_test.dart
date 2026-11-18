@@ -86,7 +86,7 @@ void main() {
       );
       await tester.tap(find.text('Mine'));
       await tester.pumpAndSettle();
-      expect(find.text('Nothing playing yet'), findsOneWidget);
+      expect(find.text('Pick a song to start the party'), findsOneWidget);
     });
 
     testWidgets('pull to refresh reloads the list', (tester) async {
@@ -155,7 +155,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(repo.calls, contains('create:Friday'));
-      expect(find.text('Nothing playing yet'), findsOneWidget);
+      expect(find.text('Pick a song to start the party'), findsOneWidget);
     });
 
     testWidgets('a failure is shown in the sheet and the sheet stays', (
@@ -220,7 +220,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(repo.calls, ['join:ABC234']);
-      expect(find.text('Nothing playing yet'), findsOneWidget);
+      expect(find.text('Pick a song to start the party'), findsOneWidget);
     });
 
     testWidgets('a wrong code shows "No room with that code." in the sheet', (
@@ -258,7 +258,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(repo.calls, ['join:ABC234']);
-      expect(find.text('Nothing playing yet'), findsOneWidget);
+      expect(find.text('Pick a song to start the party'), findsOneWidget);
     });
 
     testWidgets('shows a spinner while joining', (tester) async {

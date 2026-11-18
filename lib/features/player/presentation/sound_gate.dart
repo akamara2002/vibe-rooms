@@ -7,7 +7,10 @@ import 'player_providers.dart';
 /// interacted with the page, so on web nothing plays until this is tapped.
 /// Renders nothing once sound is on (or where no gate is needed).
 class SoundGate extends ConsumerWidget {
-  const SoundGate({super.key});
+  const SoundGate({super.key, this.message = 'Tap to turn on sound'});
+
+  /// "Music is playing. Tap to join in" for a late joiner.
+  final String message;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -21,7 +24,7 @@ class SoundGate extends ConsumerWidget {
       padding: const EdgeInsets.only(bottom: 16),
       child: Semantics(
         button: true,
-        label: 'Tap to turn on sound',
+        label: message,
         // The InkWell below is excluded from semantics, so the tap action
         // must be declared here for screen readers.
         onTap: () => ref.read(soundEnabledProvider.notifier).enable(),
@@ -45,7 +48,7 @@ class SoundGate extends ConsumerWidget {
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
-                          'Tap to turn on sound',
+                          message,
                           style: theme.textTheme.titleMedium?.copyWith(
                             color: scheme.onPrimaryContainer,
                             fontWeight: FontWeight.w700,
