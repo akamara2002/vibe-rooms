@@ -118,8 +118,28 @@ class TrackTile extends StatelessWidget {
             ),
           );
 
-    final row = actions.isEmpty
+    // Actions sit beside the row when there is room, and under it on a narrow
+    // phone or with large text (they would squeeze the title to nothing).
+    final compact =
+        MediaQuery.textScalerOf(context).scale(1) > 1.25 ||
+        MediaQuery.sizeOf(context).width < 420;
+    final Widget row = actions.isEmpty
         ? main
+        : compact
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              main,
+              Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: Wrap(
+                  alignment: WrapAlignment.end,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: actions,
+                ),
+              ),
+            ],
+          )
         : Row(
             children: [
               Expanded(child: main),

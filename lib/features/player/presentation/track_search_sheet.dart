@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -251,63 +252,71 @@ class _TrackSearchSheetState extends ConsumerState<TrackSearchSheet> {
       );
     }
 
-    // Its own Scaffold, so a snackbar shows above the sheet instead of behind.
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      resizeToAvoidBottomInset: false,
-      body: Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.viewInsetsOf(context).bottom,
-        ),
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    widget.title,
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
+    // Escape closes the sheet (the Scaffold below would otherwise keep the
+    // default dismiss from reaching the sheet's route), also from the field.
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.of(context).maybePop(),
+      },
+      // Its own Scaffold, so a snackbar shows above the sheet instead of behind.
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        resizeToAvoidBottomInset: false,
+        body: Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      widget.title,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _field,
-                    autofocus: true,
-                    textInputAction: TextInputAction.search,
-                    onChanged: _onChanged,
-                    decoration: InputDecoration(
-                      hintText: 'Search Audius',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _field.text.isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: 'Clear',
-                              icon: const Icon(Icons.close),
-                              onPressed: () {
-                                _field.clear();
-                                _onChanged('');
-                              },
-                            ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _field,
+                      autofocus: true,
+                      textInputAction: TextInputAction.search,
+                      onChanged: _onChanged,
+                      decoration: InputDecoration(
+                        hintText: 'Search Audius',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: _field.text.isEmpty
+                            ? null
+                            : IconButton(
+                                tooltip: 'Clear',
+                                icon: const Icon(Icons.close),
+                                onPressed: () {
+                                  _field.clear();
+                                  _onChanged('');
+                                },
+                              ),
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(child: body),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              child: Text(
-                'Music via Audius',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                  ],
                 ),
               ),
-            ),
-          ],
+              Expanded(child: body),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Text(
+                  'Music via Audius',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -474,7 +483,7 @@ class _Problem extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,

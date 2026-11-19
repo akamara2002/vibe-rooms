@@ -22,6 +22,8 @@ import '../domain/room_code.dart';
 import '../domain/room_failure.dart';
 import '../domain/room_member.dart';
 import '../domain/room_name.dart';
+import 'host_presence.dart';
+import 'leave_dialog.dart';
 import 'room_not_available.dart';
 import 'rooms_providers.dart';
 
@@ -40,28 +42,8 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
   bool _leaving = false;
 
   Future<void> _confirmLeave(Room room, {required bool isHost}) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(isHost ? 'Close room?' : 'Leave room?'),
-        content: Text(
-          isHost
-              ? 'The room closes for everyone and its code stops working.'
-              : 'You can rejoin later with the room code.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text(isHost ? 'Close room' : 'Leave room'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
+    final confirmed = await confirmLeaveOrClose(context, isHost: isHost);
+    if (!confirmed || !mounted) return;
 
     final container = ProviderScope.containerOf(context, listen: false);
     final repo = container.read(roomRepositoryProvider);
@@ -116,6 +98,13 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
         message: error is RoomFailure
             ? error.message
             : const RoomFailure(RoomFailureKind.unknown).message,
+        // Retrying only helps for a temporary failure.
+        onRetry:
+            error is! RoomFailure ||
+                error.kind == RoomFailureKind.network ||
+                error.kind == RoomFailureKind.unknown
+            ? () => ref.invalidate(roomProvider(widget.id))
+            : null,
       ),
       data: (value) {
         if (value == null) {
@@ -158,7 +147,8 @@ class _RoomViewState extends ConsumerState<_RoomView> {
     final myId = ref.read(authRepositoryProvider).userId;
     final isHost = room.hostId == myId;
     final args = (roomId: room.id, isHost: isHost);
-    final members = ref.watch(roomMembersProvider(room.id)).value ?? const [];
+    final membersAsync = ref.watch(roomMembersProvider(room.id));
+    final members = membersAsync.value ?? const <RoomMember>[];
     final online =
         ref.watch(onlineUsersProvider(room.id)).value ?? const <String>{};
     // Watching a slice keeps the sync controller (and its engine) alive for the
@@ -176,6 +166,13 @@ class _RoomViewState extends ConsumerState<_RoomView> {
     // another tab is open.
     ref.watch(chatControllerProvider(room.id).select((_) => true));
     ref.watch(reactionControllerProvider(room.id).select((_) => true));
+    final hostOffline = ref.watch(
+      hostOfflineProvider((
+        roomId: room.id,
+        hostId: room.hostId,
+        isHost: isHost,
+      )),
+    );
     final showDebug = ref.watch(debugPanelDefaultProvider) || _titleTaps >= 5;
 
     return GradientBackground(
@@ -190,6 +187,9 @@ class _RoomViewState extends ConsumerState<_RoomView> {
           ),
           title: GestureDetector(
             behavior: HitTestBehavior.opaque,
+            // A hidden developer trigger, not a button: screen readers should
+            // not announce it as one.
+            excludeFromSemantics: true,
             onTap: () => setState(() => _titleTaps++),
             child: Text(
               room.name,
@@ -222,6 +222,7 @@ class _RoomViewState extends ConsumerState<_RoomView> {
                   children: [
                     _CodeHeader(room: room),
                     const SizedBox(height: 16),
+                    if (hostOffline) const _HostOfflineBanner(),
                     SoundGate(
                       message: playing
                           ? 'Music is playing. Tap to join in'
@@ -231,6 +232,9 @@ class _RoomViewState extends ConsumerState<_RoomView> {
                       builder: (context, constraints) {
                         final nowPlaying = _PlayerArea(args: args);
                         final listeners = _Listeners(
+                          state: membersAsync,
+                          onRetry: () =>
+                              ref.invalidate(roomMembersProvider(room.id)),
                           members: members,
                           online: online,
                           myId: myId,
@@ -264,6 +268,51 @@ class _RoomViewState extends ConsumerState<_RoomView> {
                   ],
                 ),
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown to listeners while the host is away. Playback is not touched: the
+/// last state keeps playing out, only the host can change it.
+class _HostOfflineBanner extends StatelessWidget {
+  const _HostOfflineBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Semantics(
+        liveRegion: true,
+        container: true,
+        child: Material(
+          color: scheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              children: [
+                ExcludeSemantics(
+                  child: Icon(
+                    Icons.info_outline,
+                    color: scheme.onSecondaryContainer,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'The host is offline. Only the host can change the music.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -313,16 +362,21 @@ class _CodeHeader extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Semantics(
-                label: 'Room code ${room.code.split('').join(' ')}',
-                child: ExcludeSemantics(
-                  child: Text(
-                    room.code,
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      fontFamily: 'monospace',
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 4,
-                      color: scheme.onPrimaryContainer,
+              Flexible(
+                child: Semantics(
+                  label: 'Room code ${room.code.split('').join(' ')}',
+                  child: ExcludeSemantics(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        room.code,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 4,
+                          color: scheme.onPrimaryContainer,
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -348,11 +402,15 @@ class _CodeHeader extends StatelessWidget {
 
 class _Listeners extends StatelessWidget {
   const _Listeners({
+    required this.state,
+    required this.onRetry,
     required this.members,
     required this.online,
     required this.myId,
   });
 
+  final AsyncValue<List<RoomMember>> state;
+  final VoidCallback onRetry;
   final List<RoomMember> members;
   final Set<String> online;
   final String? myId;
@@ -376,24 +434,44 @@ class _Listeners extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Listeners (${members.length})',
+              members.isEmpty && (state.isLoading || state.hasError)
+                  ? 'Listeners'
+                  : 'Listeners (${members.length})',
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
             ),
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final member in sorted)
-                  _ListenerChip(
-                    member: member,
-                    isMe: member.userId == myId,
-                    isOnline: online.contains(member.userId),
+            if (state.isLoading && members.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: LinearProgressIndicator(
+                  semanticsLabel: 'Loading listeners',
+                ),
+              )
+            else if (state.hasError && members.isEmpty)
+              Row(
+                children: [
+                  const Expanded(child: Text('Could not load the listeners.')),
+                  TextButton(
+                    onPressed: onRetry,
+                    child: const Text('Try again'),
                   ),
-              ],
-            ),
+                ],
+              )
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final member in sorted)
+                    _ListenerChip(
+                      member: member,
+                      isMe: member.userId == myId,
+                      isOnline: online.contains(member.userId),
+                    ),
+                ],
+              ),
           ],
         ),
       ),

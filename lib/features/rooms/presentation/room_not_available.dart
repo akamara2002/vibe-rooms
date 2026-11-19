@@ -11,10 +11,14 @@ class RoomNotAvailable extends StatelessWidget {
     super.key,
     required this.title,
     required this.message,
+    this.onRetry,
   });
 
   final String title;
   final String message;
+
+  /// Set for a failure that may be temporary (not for "not found").
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -55,10 +59,21 @@ class RoomNotAvailable extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 28),
-                    FilledButton(
-                      onPressed: () => context.go('/home'),
-                      child: const Text('Back to home'),
-                    ),
+                    if (onRetry != null) ...[
+                      FilledButton(
+                        onPressed: onRetry,
+                        child: const Text('Try again'),
+                      ),
+                      const SizedBox(height: 12),
+                      OutlinedButton(
+                        onPressed: () => context.go('/home'),
+                        child: const Text('Back to home'),
+                      ),
+                    ] else
+                      FilledButton(
+                        onPressed: () => context.go('/home'),
+                        child: const Text('Back to home'),
+                      ),
                     const SizedBox(height: 12),
                     OutlinedButton(
                       onPressed: () => showJoinRoomSheet(context),

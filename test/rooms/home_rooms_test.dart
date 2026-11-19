@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:vibe_rooms/features/rooms/domain/hosted_cap.dart';
 import 'package:vibe_rooms/features/rooms/domain/room_failure.dart';
+import 'package:vibe_rooms/features/rooms/presentation/room_creator.dart';
 import 'package:vibe_rooms/features/rooms/domain/room_summary.dart';
 import 'package:vibe_rooms/features/rooms/presentation/home_screen.dart';
 
@@ -24,7 +26,119 @@ String _codeField(WidgetTester tester) =>
 Finder _create() => find.widgetWithText(FilledButton, 'Create');
 Finder _join() => find.widgetWithText(FilledButton, 'Join');
 
+List<RoomSummary> _hosted(int n, {String host = 'user-1'}) => [
+  for (var i = 0; i < n; i++)
+    RoomSummary(
+      room: fakeRoom(
+        id: 'r$i',
+        name: 'Room $i',
+        code: 'CODE$i'.padRight(6, 'A'),
+        hostId: host,
+      ),
+      memberCount: 1,
+    ),
+];
+
 void main() {
+  group('the hosted-room cap', () {
+    test('counts only open rooms I host', () {
+      final mixed = [..._hosted(3), ..._hosted(4, host: 'other')];
+      expect(hostedRoomCount(mixed, 'user-1'), 3);
+      expect(hostedRoomCount(mixed, null), 0);
+    });
+
+    test('the sixth room is refused before any create call', () async {
+      final repo = FakeRoomRepository(myRoomsList: _hosted(maxHostedRooms));
+      final creator = RoomCreator(repo, () => 'user-1');
+      await expectLater(
+        creator.create('One more'),
+        throwsA(
+          isA<RoomFailure>().having(
+            (f) => f.message,
+            'message',
+            'You already host 5 rooms. Close one first.',
+          ),
+        ),
+      );
+      expect(repo.calls.where((c) => c.startsWith('create')), isEmpty);
+    });
+
+    test(
+      'the fifth room is allowed, and rooms I only joined do not count',
+      () async {
+        final repo = FakeRoomRepository(
+          myRoomsList: [
+            ..._hosted(maxHostedRooms - 1),
+            ..._hosted(6, host: 'other'),
+          ],
+        )..createResult = fakeRoom(id: 'new');
+        final room = await RoomCreator(repo, () => 'user-1').create('Fifth');
+        expect(room.id, 'new');
+      },
+    );
+
+    test(
+      'it reads a fresh list, so a room closed elsewhere frees a slot',
+      () async {
+        final repo = FakeRoomRepository(myRoomsList: _hosted(maxHostedRooms))
+          ..createResult = fakeRoom(id: 'new');
+        final creator = RoomCreator(repo, () => 'user-1');
+        await expectLater(creator.create('x'), throwsA(isA<RoomFailure>()));
+        repo.mine = _hosted(maxHostedRooms - 1); // closed on another device
+        expect((await creator.create('x')).id, 'new');
+      },
+    );
+
+    testWidgets('the sheet shows the message and stays open', (tester) async {
+      final repo = FakeRoomRepository(myRoomsList: _hosted(maxHostedRooms));
+      await _home(tester, rooms: repo);
+      await tester.tap(find.text('Create a room'));
+      await tester.pumpAndSettle();
+      await tester.tap(_create());
+      await tester.pumpAndSettle();
+      expect(
+        find.text('You already host 5 rooms. Close one first.'),
+        findsOneWidget,
+      );
+      expect(repo.calls.where((c) => c.startsWith('create')), isEmpty);
+    });
+
+    testWidgets('Close room on a hosted row asks first, then closes it', (
+      tester,
+    ) async {
+      final repo = FakeRoomRepository(
+        myRoomsList: [
+          ..._hosted(1),
+          ..._hosted(1, host: 'other').map(
+            (s) => RoomSummary(
+              room: fakeRoom(id: 'joined', name: 'Joined', hostId: 'other'),
+              memberCount: 2,
+            ),
+          ),
+        ],
+      );
+      await _home(tester, rooms: repo);
+      // Only the room I host has the action.
+      expect(find.byTooltip('Close room Room 0'), findsOneWidget);
+      expect(find.byTooltip('Close room Joined'), findsNothing);
+
+      await tester.tap(find.byTooltip('Close room Room 0'));
+      await tester.pumpAndSettle();
+      expect(find.text('Close room?'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(repo.calls.where((c) => c.startsWith('close')), isEmpty);
+
+      await tester.tap(find.byTooltip('Close room Room 0'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Close room'));
+      await tester.pumpAndSettle();
+      expect(repo.calls, contains('close:r0'));
+      expect(find.text('Room 0'), findsNothing);
+      expect(find.text('Joined'), findsOneWidget);
+    });
+  });
+
   group('My rooms', () {
     testWidgets('empty state', (tester) async {
       await _home(tester);

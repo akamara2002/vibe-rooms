@@ -49,38 +49,50 @@ class _ReactionBarState extends ConsumerState<ReactionBar> {
         _pulse(next.pulseType);
       }
     });
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        for (final type in ReactionType.values)
-          Semantics(
-            button: true,
-            label: 'Send ${type.label} reaction',
-            onTap: () => controller.tap(type),
-            child: ExcludeSemantics(
-              child: Material(
-                color: _pulsed == type
-                    ? scheme.primaryContainer
-                    : scheme.surfaceContainerHigh,
-                shape: const CircleBorder(),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: () => controller.tap(type),
-                  child: SizedBox(
-                    width: 48,
-                    height: 48,
-                    child: Center(
-                      child: Text(
-                        type.emoji,
-                        style: const TextStyle(fontSize: 24),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 48 px buttons where there is room; on a very narrow screen they
+        // shrink to 44 px (the smallest comfortable tap target) instead of
+        // overflowing.
+        final size = (constraints.maxWidth / ReactionType.values.length).clamp(
+          44.0,
+          48.0,
+        );
+        return Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          runSpacing: 8,
+          children: [
+            for (final type in ReactionType.values)
+              Semantics(
+                button: true,
+                label: 'Send ${type.label} reaction',
+                onTap: () => controller.tap(type),
+                child: ExcludeSemantics(
+                  child: Material(
+                    color: _pulsed == type
+                        ? scheme.primaryContainer
+                        : scheme.surfaceContainerHigh,
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () => controller.tap(type),
+                      child: SizedBox(
+                        width: size,
+                        height: size,
+                        child: Center(
+                          child: Text(
+                            type.emoji,
+                            style: const TextStyle(fontSize: 24),
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
-      ],
+          ],
+        );
+      },
     );
   }
 }

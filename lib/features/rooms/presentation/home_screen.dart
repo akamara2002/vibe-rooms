@@ -7,6 +7,8 @@ import '../../auth/domain/profile.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../../auth/presentation/profile_sheet.dart';
 import '../domain/room_summary.dart';
+import '../domain/room_failure.dart';
+import 'leave_dialog.dart';
 import 'room_sheets.dart';
 import 'rooms_providers.dart';
 
@@ -179,11 +181,10 @@ class _ActionCard extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 140),
+          constraints: const BoxConstraints(minHeight: 88),
           child: Padding(
             padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
                 Container(
                   width: 48,
@@ -194,20 +195,16 @@ class _ActionCard extends StatelessWidget {
                   ),
                   child: Icon(icon, color: scheme.primary),
                 ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
                     ),
-                    Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
-                  ],
+                  ),
                 ),
+                Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
               ],
             ),
           ),
@@ -368,25 +365,39 @@ class _RoomTile extends ConsumerWidget {
                           ),
                         ),
                         const SizedBox(height: 4),
-                        Text(
-                          room.code,
-                          style: theme.textTheme.labelLarge?.copyWith(
-                            fontFamily: 'monospace',
-                            letterSpacing: 2,
-                            color: scheme.primary,
-                          ),
+                        // A Wrap, so a big text size or a narrow phone puts
+                        // the count under the code instead of overflowing.
+                        Wrap(
+                          spacing: 12,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(
+                              room.code,
+                              style: theme.textTheme.labelLarge?.copyWith(
+                                fontFamily: 'monospace',
+                                letterSpacing: 2,
+                                color: scheme.primary,
+                              ),
+                            ),
+                            Text(
+                              listeners,
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Text(
-                    listeners,
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
+                  const SizedBox(width: 8),
                   Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+                  if (isHost)
+                    IconButton(
+                      tooltip: 'Close room ${room.name}',
+                      icon: const Icon(Icons.close),
+                      onPressed: () => _close(context),
+                    ),
                 ],
               ),
             ),
@@ -394,5 +405,18 @@ class _RoomTile extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _close(BuildContext context) async {
+    final container = ProviderScope.containerOf(context, listen: false);
+    final messenger = ScaffoldMessenger.of(context);
+    if (!await confirmLeaveOrClose(context, isHost: true)) return;
+    try {
+      await container.read(roomRepositoryProvider).closeRoom(summary.room.id);
+    } on RoomFailure catch (failure) {
+      messenger.showSnackBar(SnackBar(content: Text(failure.message)));
+    } finally {
+      container.invalidate(myRoomsProvider);
+    }
   }
 }

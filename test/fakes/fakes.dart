@@ -40,7 +40,14 @@ import 'package:vibe_rooms/features/rooms/presentation/rooms_providers.dart';
 
 /// An in-memory [AuthRepository] with controllable results. No network.
 class FakeAuthRepository implements AuthRepository {
-  FakeAuthRepository({this.signedIn = false, this.anonymous = false});
+  FakeAuthRepository({
+    this.signedIn = false,
+    this.anonymous = false,
+    this.userId_ = 'user-1',
+  });
+
+  /// The id of the signed-in user.
+  final String userId_;
 
   final _changes = StreamController<bool>.broadcast();
   bool signedIn;
@@ -77,7 +84,7 @@ class FakeAuthRepository implements AuthRepository {
   @override
   bool get isAnonymous => anonymous;
   @override
-  String? get userId => signedIn ? 'user-1' : null;
+  String? get userId => signedIn ? userId_ : null;
 
   @override
   Future<void> signInAsGuest(String displayName) {
@@ -108,10 +115,19 @@ class FakeProfileRepository implements ProfileRepository {
 
   Profile profile;
   AuthFailure? failUpdate;
+
+  /// How many of the next reads fail.
+  int failGet = 0;
   final updates = <({String? displayName, String? avatarEmoji})>[];
 
   @override
-  Future<Profile> getMyProfile() async => profile;
+  Future<Profile> getMyProfile() async {
+    if (failGet > 0) {
+      failGet--;
+      throw const AuthFailure(AuthFailureKind.network);
+    }
+    return profile;
+  }
 
   @override
   Future<Profile> updateMyProfile({
@@ -185,6 +201,12 @@ class FakeRoomRepository implements RoomRepository {
   Completer<Room>? createGate;
   final calls = <String>[];
 
+  /// How many of the next reads fail (then they work again), to test the error
+  /// states and their Retry buttons.
+  int failMyRooms = 0;
+  int failGetRoom = 0;
+  int failMembers = 0;
+
   @override
   Future<Room> createRoom(String name) async {
     calls.add('create:$name');
@@ -202,14 +224,31 @@ class FakeRoomRepository implements RoomRepository {
   }
 
   @override
-  Future<List<RoomSummary>> myRooms() async => mine;
+  Future<List<RoomSummary>> myRooms() async {
+    if (failMyRooms > 0) {
+      failMyRooms--;
+      throw const RoomFailure(RoomFailureKind.network);
+    }
+    return mine;
+  }
 
   @override
-  Future<Room?> getRoom(String id) async => rooms[id];
+  Future<Room?> getRoom(String id) async {
+    if (failGetRoom > 0) {
+      failGetRoom--;
+      throw const RoomFailure(RoomFailureKind.network);
+    }
+    return rooms[id];
+  }
 
   @override
-  Stream<List<RoomMember>> watchMembers(String roomId) =>
-      Stream.value(membersByRoom[roomId] ?? const []);
+  Stream<List<RoomMember>> watchMembers(String roomId) {
+    if (failMembers > 0) {
+      failMembers--;
+      return Stream.error(const RoomFailure(RoomFailureKind.network));
+    }
+    return Stream.value(membersByRoom[roomId] ?? const []);
+  }
 
   @override
   Future<void> leaveRoom(String roomId) async {
@@ -229,9 +268,13 @@ class FakeRoomPresence implements RoomPresence {
 
   Set<String> online;
 
+  /// When set, [watchOnlineUserIds] follows it instead of a single value, so a
+  /// test can make people come and go (and fail).
+  StreamController<Set<String>>? live;
+
   @override
   Stream<Set<String>> watchOnlineUserIds(String roomId, Profile me) =>
-      Stream.value(online);
+      live?.stream ?? Stream.value(online);
 }
 
 Track fakeTrack({
@@ -923,10 +966,16 @@ Future<void> pumpApp(
   bool debugPanel = true,
   bool soundGate = false,
   bool ready = true,
+  Size logicalSize = const Size(450, 800),
+  double textScale = 1.0,
 }) async {
-  tester.view.physicalSize = const Size(900, 1600);
+  tester.view.physicalSize = logicalSize * 2;
   tester.view.devicePixelRatio = 2;
   addTearDown(tester.view.reset);
+  if (textScale != 1.0) {
+    tester.platformDispatcher.textScaleFactorTestValue = textScale;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+  }
 
   await tester.pumpWidget(
     ProviderScope(

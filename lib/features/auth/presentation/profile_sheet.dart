@@ -21,8 +21,27 @@ class ProfileSheet extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final profile = ref.watch(myProfileProvider).value;
+    final async = ref.watch(myProfileProvider);
+    final profile = async.value;
     if (profile == null) {
+      if (async.hasError) {
+        return ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 200),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Could not load your profile.'),
+                const SizedBox(height: 12),
+                FilledButton(
+                  onPressed: () => ref.invalidate(myProfileProvider),
+                  child: const Text('Try again'),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
       return const SizedBox(
         height: 200,
         child: Center(child: CircularProgressIndicator()),

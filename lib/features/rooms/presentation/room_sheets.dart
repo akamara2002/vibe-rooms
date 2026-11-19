@@ -7,6 +7,7 @@ import '../../auth/presentation/auth_providers.dart';
 import '../domain/room_code.dart';
 import '../domain/room_failure.dart';
 import '../domain/room_name.dart';
+import 'room_creator.dart';
 import 'rooms_providers.dart';
 
 Future<void> showCreateRoomSheet(BuildContext context) {
@@ -120,8 +121,8 @@ class _CreateRoomSheetState extends ConsumerState<CreateRoomSheet> {
     setState(() => _busy = true);
     try {
       final room = await container
-          .read(roomRepositoryProvider)
-          .createRoom(_name.text.trim());
+          .read(roomCreatorProvider)
+          .create(_name.text.trim());
       container.invalidate(myRoomsProvider);
       if (!mounted) return;
       navigator.pop();

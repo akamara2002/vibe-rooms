@@ -1,8 +1,11 @@
+import 'hosted_cap.dart';
+
 enum RoomFailureKind {
   roomNotFound,
   invalidName,
   notAuthenticated,
   closed,
+  tooManyHosted,
   network,
   unknown,
 }
@@ -18,6 +21,8 @@ class RoomFailure implements Exception {
     RoomFailureKind.invalidName => 'Room names must be 1 to 40 characters.',
     RoomFailureKind.notAuthenticated => 'Please sign in again.',
     RoomFailureKind.closed => 'This room has been closed.',
+    RoomFailureKind.tooManyHosted =>
+      'You already host $maxHostedRooms rooms. Close one first.',
     RoomFailureKind.network =>
       'Could not reach the server. Check your connection and try again.',
     RoomFailureKind.unknown => 'Something went wrong. Please try again.',

@@ -96,19 +96,21 @@ class QueueTab extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 8,
             children: [
-              Expanded(
-                child: Semantics(
-                  liveRegion: true,
-                  header: true,
-                  label: count == null ? 'Up next' : 'Up next, $count songs',
-                  child: ExcludeSemantics(
-                    child: Text(
-                      count == null ? 'Up next' : 'Up next ($count)',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+              Semantics(
+                liveRegion: true,
+                header: true,
+                label: count == null ? 'Up next' : 'Up next, $count songs',
+                child: ExcludeSemantics(
+                  child: Text(
+                    count == null ? 'Up next' : 'Up next ($count)',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),

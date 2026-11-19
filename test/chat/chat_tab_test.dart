@@ -366,5 +366,65 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('9+'), findsNothing);
     });
+
+    group('the draft', () {
+      testWidgets('survives a switch to the Queue tab and back', (
+        tester,
+      ) async {
+        await openRoom(tester);
+        await tester.tap(find.text('Chat'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField).last, 'half a thought');
+        await tester.pump();
+
+        await tester.tap(find.text('Queue'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Chat'));
+        await tester.pumpAndSettle();
+
+        final input = tester.widget<TextField>(find.byType(TextField).last);
+        expect(input.controller!.text, 'half a thought');
+      });
+
+      testWidgets('is cleared when the message is sent', (tester) async {
+        await openRoom(tester);
+        await tester.tap(find.text('Chat'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField).last, 'sent one');
+        await tester.pump();
+        await tester.ensureVisible(find.byTooltip('Send'));
+        await tester.pump();
+        await tester.tap(find.byTooltip('Send'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Queue'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Chat'));
+        await tester.pumpAndSettle();
+        final input = tester.widget<TextField>(find.byType(TextField).last);
+        expect(input.controller!.text, isEmpty);
+      });
+
+      testWidgets('is gone after leaving the room and coming back', (
+        tester,
+      ) async {
+        await openRoom(tester);
+        await tester.tap(find.text('Chat'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField).last, 'left behind');
+        await tester.pump();
+
+        GoRouter.of(tester.element(find.byType(Scaffold).first)).go('/home');
+        await tester.pumpAndSettle();
+        GoRouter.of(tester.element(find.byType(Scaffold).first))
+            .go('/room/room-1');
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Chat'));
+        await tester.pumpAndSettle();
+
+        final input = tester.widget<TextField>(find.byType(TextField).last);
+        expect(input.controller!.text, isEmpty);
+      });
+    });
   });
 }

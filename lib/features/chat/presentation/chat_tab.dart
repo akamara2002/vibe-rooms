@@ -308,7 +308,16 @@ class _Input extends ConsumerStatefulWidget {
 }
 
 class _InputState extends ConsumerState<_Input> {
-  final _text = TextEditingController();
+  late final TextEditingController _text;
+
+  @override
+  void initState() {
+    super.initState();
+    // Starts with the unsent text kept by the controller (see ChatController).
+    _text = TextEditingController(
+      text: ref.read(chatControllerProvider(widget.roomId).notifier).draft,
+    );
+  }
 
   @override
   void dispose() {
@@ -369,7 +378,12 @@ class _InputState extends ConsumerState<_Input> {
                   minLines: 1,
                   maxLines: 3,
                   textCapitalization: TextCapitalization.sentences,
-                  onChanged: (_) => setState(() {}),
+                  onChanged: (value) {
+                    ref
+                        .read(chatControllerProvider(widget.roomId).notifier)
+                        .setDraft(value);
+                    setState(() {});
+                  },
                   decoration: const InputDecoration(
                     hintText: 'Message the room',
                   ),

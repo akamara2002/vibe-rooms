@@ -294,6 +294,23 @@ class ChatController extends Notifier<ChatState> {
   /// the list (sending). The caller clears its input only on null, so nothing
   /// the user typed is lost to a rate limit.
   ChatFailure? send(String text) {
+    final failure = _trySend(text);
+    if (failure == null) _draft = '';
+    return failure;
+  }
+
+  // The text typed but not sent yet, so it survives a switch to the Queue tab
+  // (the input widget is rebuilt). Kept in memory only, outside [ChatState] so
+  // typing does not rebuild anything, and gone when the room is left (this
+  // controller is autoDispose and the room screen is its only holder).
+  String _draft = '';
+
+  String get draft => _draft;
+
+  // Never logged: it is what the user is typing.
+  void setDraft(String text) => _draft = text;
+
+  ChatFailure? _trySend(String text) {
     final body = sanitizeMessage(text);
     if (body == null) {
       return ChatFailure(
