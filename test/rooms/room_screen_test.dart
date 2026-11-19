@@ -63,7 +63,8 @@ void main() {
     );
     await tester.tap(find.text('Chat'));
     await tester.pumpAndSettle();
-    expect(find.text('Coming soon'), findsOneWidget);
+    expect(find.text('Say hi 👋'), findsOneWidget);
+    expect(find.text('Message the room'), findsOneWidget);
   });
 
   testWidgets('listeners: online dots, host crown and "You"', (tester) async {

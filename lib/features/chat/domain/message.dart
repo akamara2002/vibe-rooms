@@ -8,6 +8,8 @@ class Message {
     required this.userId,
     required this.body,
     required this.createdAt,
+    this.senderName,
+    this.senderEmoji,
   });
 
   factory Message.fromJson(Map<String, dynamic> json) => Message(
@@ -16,13 +18,29 @@ class Message {
     userId: json['user_id'] as String,
     body: json['body'] as String,
     createdAt: parseUtc(json['created_at'] as String),
+    // Embedded by `select('*, profiles(display_name, avatar_emoji)')`. A
+    // realtime INSERT event has no embed, so these are null there.
+    senderName: _str(_profile(json)?['display_name']),
+    senderEmoji: _str(_profile(json)?['avatar_emoji']),
   );
+
+  static String? _str(Object? v) => v is String ? v : null;
+
+  static Map<String, dynamic>? _profile(Map<String, dynamic> json) {
+    final profile = json['profiles'];
+    if (profile is Map<String, dynamic>) return profile;
+    return null;
+  }
 
   final String id;
   final String roomId;
   final String userId;
   final String body;
   final DateTime createdAt;
+
+  /// Who sent it (from the embedded profile); not a column of this table.
+  final String? senderName;
+  final String? senderEmoji;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -46,5 +64,5 @@ class Message {
   int get hashCode => Object.hash(id, roomId, userId, body, createdAt);
 
   @override
-  String toString() => 'Message($id, $body)';
+  String toString() => 'Message($id)';
 }

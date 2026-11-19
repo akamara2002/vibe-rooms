@@ -7,7 +7,12 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/widgets/gradient_background.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../../player/presentation/player_card.dart';
+import '../../chat/presentation/chat_providers.dart';
+import '../../chat/presentation/chat_tab.dart';
 import '../../queue/presentation/queue_providers.dart';
+import '../../reactions/presentation/reaction_bar.dart';
+import '../../reactions/presentation/reaction_controller.dart';
+import '../../reactions/presentation/reaction_overlay.dart';
 import '../../queue/presentation/queue_tab.dart';
 import '../../player/presentation/sync_controller.dart';
 import '../../player/presentation/sync_providers.dart';
@@ -167,6 +172,10 @@ class _RoomViewState extends ConsumerState<_RoomView> {
     // And the queue's realtime channel, so switching tabs does not drop and
     // rejoin it.
     ref.watch(upcomingItemsProvider(room.id).select((_) => true));
+    // Chat messages, the unread count and reactions keep arriving while
+    // another tab is open.
+    ref.watch(chatControllerProvider(room.id).select((_) => true));
+    ref.watch(reactionControllerProvider(room.id).select((_) => true));
     final showDebug = ref.watch(debugPanelDefaultProvider) || _titleTaps >= 5;
 
     return GradientBackground(
@@ -220,7 +229,7 @@ class _RoomViewState extends ConsumerState<_RoomView> {
                     ),
                     LayoutBuilder(
                       builder: (context, constraints) {
-                        final nowPlaying = PlayerCard(args: args);
+                        final nowPlaying = _PlayerArea(args: args);
                         final listeners = _Listeners(
                           members: members,
                           online: online,
@@ -251,7 +260,7 @@ class _RoomViewState extends ConsumerState<_RoomView> {
                       _SyncDebugPanel(args: args),
                     ],
                     const SizedBox(height: 24),
-                    _Tabs(args: args),
+                    _Tabs(args: args, roomId: room.id),
                   ],
                 ),
               ),
@@ -483,17 +492,52 @@ class _ListenerChip extends StatelessWidget {
   }
 }
 
-class _Tabs extends StatefulWidget {
-  const _Tabs({required this.args});
+/// The player card with reactions floating over it and the reaction bar
+/// under it.
+class _PlayerArea extends StatelessWidget {
+  const _PlayerArea({required this.args});
 
   final SyncArgs args;
 
   @override
-  State<_Tabs> createState() => _TabsState();
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Stack(
+          children: [
+            PlayerCard(args: args),
+            Positioned.fill(child: ReactionOverlay(roomId: args.roomId)),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ReactionBar(roomId: args.roomId),
+      ],
+    );
+  }
 }
 
-class _TabsState extends State<_Tabs> with SingleTickerProviderStateMixin {
-  late final TabController _controller = TabController(length: 2, vsync: this);
+class _Tabs extends ConsumerStatefulWidget {
+  const _Tabs({required this.args, required this.roomId});
+
+  final SyncArgs args;
+  final String roomId;
+
+  @override
+  ConsumerState<_Tabs> createState() => _TabsState();
+}
+
+class _TabsState extends ConsumerState<_Tabs>
+    with SingleTickerProviderStateMixin {
+  late final TabController _controller = TabController(length: 2, vsync: this)
+    ..addListener(_onTab);
+
+  void _onTab() {
+    // The Chat tab is the visible one once the switch has finished.
+    ref
+        .read(chatControllerProvider(widget.roomId).notifier)
+        .setChatVisible(_controller.index == 1 && !_controller.indexIsChanging);
+  }
 
   @override
   void dispose() {
@@ -503,8 +547,10 @@ class _TabsState extends State<_Tabs> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
+    final scheme = Theme.of(context).colorScheme;
+    final unread = ref.watch(
+      chatControllerProvider(widget.roomId).select((s) => s.unread),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -517,9 +563,18 @@ class _TabsState extends State<_Tabs> with SingleTickerProviderStateMixin {
             borderRadius: BorderRadius.circular(12),
           ),
           labelColor: scheme.onPrimaryContainer,
-          tabs: const [
-            Tab(text: 'Queue'),
-            Tab(text: 'Chat'),
+          tabs: [
+            const Tab(text: 'Queue'),
+            Tab(
+              child: Badge(
+                // Outside the label, so it does not cover the last letter.
+                alignment: AlignmentDirectional.topEnd,
+                offset: const Offset(14, -6),
+                label: Text(unread > 9 ? '9+' : '$unread'),
+                isLabelVisible: unread > 0,
+                child: const Text('Chat'),
+              ),
+            ),
           ],
         ),
         // Sized by its content (the queue can be 50 rows long), not fixed.
@@ -527,18 +582,7 @@ class _TabsState extends State<_Tabs> with SingleTickerProviderStateMixin {
           animation: _controller,
           builder: (context, _) => _controller.index == 0
               ? QueueTab(args: widget.args)
-              : SizedBox(
-                  height: 200,
-                  child: Center(
-                    child: Text(
-                      'Coming soon',
-                      semanticsLabel: 'Chat: coming soon',
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                ),
+              : ChatTab(roomId: widget.roomId),
         ),
       ],
     );

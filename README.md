@@ -80,6 +80,12 @@ The room's playback state is one database row: "at server time T the track was a
 
 Everyone in a room can add songs: open the Queue tab and tap "Add songs", then "+" on any result (the sheet stays open so you can add several). The list is the same for everyone, live, with who added what. The host can play any song right away, skip with "Next", and remove anything; you can remove your own songs. When a song ends, the host's device starts the next one automatically, so keep the host's app open. Limits: 50 songs per room and 10 per person; a song that is already queued can't be added twice.
 
+## Chat and reactions
+
+The Chat tab is a live chat for the room: type a message and press Enter (Shift+Enter for a new line), up to 500 characters. Messages are kept, so you see the latest ones when you come back. The Chat tab shows a small badge for messages you have not read. There is a limit of one message per second, and links in messages are not clickable.
+
+Under the player card are six reaction buttons (🔥 ❤️ 🙌 😂 🎶 👏). Tap one and it floats up on everyone's screen. Reactions are not saved, and if your device is set to reduce motion they pulse on the button instead of floating.
+
 ## Develop
 
 ```

@@ -18,10 +18,18 @@ import 'package:vibe_rooms/features/player/domain/room_state_repository.dart';
 import 'package:vibe_rooms/features/player/domain/track.dart';
 import 'package:vibe_rooms/features/player/presentation/player_providers.dart';
 import 'package:vibe_rooms/features/player/presentation/sync_providers.dart';
+import 'package:vibe_rooms/features/chat/domain/chat_failure.dart';
+import 'package:vibe_rooms/features/chat/domain/chat_message.dart';
+import 'package:vibe_rooms/features/chat/domain/chat_repository.dart';
+import 'package:vibe_rooms/features/chat/domain/message.dart';
+import 'package:vibe_rooms/features/chat/presentation/chat_providers.dart';
 import 'package:vibe_rooms/features/queue/domain/queue_failure.dart';
 import 'package:vibe_rooms/features/queue/domain/queue_item.dart';
 import 'package:vibe_rooms/features/queue/domain/queue_repository.dart';
 import 'package:vibe_rooms/features/queue/presentation/queue_providers.dart';
+import 'package:vibe_rooms/features/reactions/domain/reaction.dart';
+import 'package:vibe_rooms/features/reactions/domain/reaction_service.dart';
+import 'package:vibe_rooms/features/reactions/presentation/reaction_controller.dart';
 import 'package:vibe_rooms/features/rooms/domain/room.dart';
 import 'package:vibe_rooms/features/rooms/domain/room_failure.dart';
 import 'package:vibe_rooms/features/rooms/domain/room_member.dart';
@@ -432,6 +440,192 @@ class FakeMusicCatalog implements MusicCatalog {
       Uri.parse('https://audio.test/v1/tracks/$trackId/stream');
 }
 
+/// A chat row. Realtime events carry no profile, so none is set here.
+Message fakeMessage({
+  String id = 'm1',
+  String roomId = 'room-1',
+  String userId = 'user-2',
+  String body = 'hello',
+  DateTime? createdAt,
+}) => Message(
+  id: id,
+  roomId: roomId,
+  userId: userId,
+  body: body,
+  createdAt: createdAt ?? DateTime.utc(2026, 11, 18, 12),
+);
+
+/// How the fake database answers a send relative to the realtime echo.
+enum EchoMode { afterReturn, beforeReturn, none }
+
+/// An in-memory [ChatRepository]: the test plays the database and Realtime.
+class FakeChatRepository implements ChatRepository {
+  FakeChatRepository({
+    List<Message>? messages,
+    this.myId = 'user-1',
+    DateTime Function()? now,
+    Map<String, ChatSender>? profiles,
+  }) : store = [...?messages],
+       now = now ?? (() => DateTime.now().toUtc()),
+       profiles = {...?profiles};
+
+  /// Every row.
+  final List<Message> store;
+  final String myId;
+  DateTime Function() now;
+
+  /// Who can be looked up (and who `recent` embeds).
+  final Map<String, ChatSender> profiles;
+  final _controller = StreamController<Message>.broadcast();
+  void Function()? _onJoined;
+
+  final calls = <String>[];
+  final sentBodies = <String>[];
+  int watchCount = 0;
+  int cancelCount = 0;
+  int lookups = 0;
+  int recentCalls = 0;
+  int _next = 0;
+
+  EchoMode echoMode = EchoMode.afterReturn;
+
+  /// If set, the next send fails with this.
+  ChatFailure? failNextSend;
+
+  /// If set, send() waits for it.
+  Completer<void>? sendGate;
+
+  /// If set, recent() fails with this.
+  ChatFailure? failRecent;
+
+  /// A new message from someone else, as Realtime delivers it.
+  void externalInsert(Message message) {
+    store.add(message);
+    _controller.add(message);
+  }
+
+  /// A row that exists but whose event was never delivered (missed offline).
+  void missedInsert(Message message) => store.add(message);
+
+  /// The channel (re)joined.
+  void rejoin() => _onJoined?.call();
+
+  @override
+  Future<List<Message>> recent(String roomId, {int limit = 50}) async {
+    recentCalls++;
+    final failure = failRecent;
+    if (failure != null) throw failure;
+    final sorted = [...store]
+      ..sort((a, b) {
+        final byTime = a.createdAt.compareTo(b.createdAt);
+        return byTime != 0 ? byTime : a.id.compareTo(b.id);
+      });
+    final newest = sorted.length > limit
+        ? sorted.sublist(sorted.length - limit)
+        : sorted;
+    return [
+      for (final m in newest)
+        Message(
+          id: m.id,
+          roomId: m.roomId,
+          userId: m.userId,
+          body: m.body,
+          createdAt: m.createdAt,
+          senderName: profiles[m.userId]?.name,
+          senderEmoji: profiles[m.userId]?.emoji,
+        ),
+    ];
+  }
+
+  @override
+  Stream<Message> watchNew(String roomId, {required void Function() onJoined}) {
+    watchCount++;
+    _onJoined = onJoined;
+    late final StreamController<Message> out;
+    StreamSubscription<Message>? sub;
+    out = StreamController<Message>(
+      onListen: () {
+        sub = _controller.stream.listen(out.add);
+      },
+      onCancel: () {
+        cancelCount++;
+        return sub?.cancel();
+      },
+    );
+    return out.stream;
+  }
+
+  @override
+  Future<Message> send(String roomId, String body) async {
+    calls.add('send');
+    sentBodies.add(body);
+    if (sendGate != null) await sendGate!.future;
+    final failure = failNextSend;
+    if (failure != null) {
+      failNextSend = null;
+      throw failure;
+    }
+    final message = Message(
+      id: 'srv-${_next++}',
+      roomId: roomId,
+      userId: myId,
+      body: body,
+      createdAt: now(),
+    );
+    store.add(message);
+    switch (echoMode) {
+      case EchoMode.beforeReturn:
+        _controller.add(message);
+        await Future<void>.delayed(Duration.zero);
+      case EchoMode.afterReturn:
+        scheduleMicrotask(() => _controller.add(message));
+      case EchoMode.none:
+        break;
+    }
+    return message;
+  }
+
+  @override
+  Future<ChatSender?> sender(String userId) async {
+    lookups++;
+    return profiles[userId];
+  }
+}
+
+/// An in-memory [ReactionService].
+class FakeReactionService implements ReactionService {
+  final _controller = StreamController<Reaction>.broadcast();
+  final sent = <ReactionType>[];
+  int listens = 0;
+  int cancels = 0;
+  bool failSends = false;
+
+  void emit(ReactionType type) => _controller.add(Reaction(type));
+
+  @override
+  Stream<Reaction> incoming(String roomId) {
+    late final StreamController<Reaction> out;
+    StreamSubscription<Reaction>? sub;
+    out = StreamController<Reaction>(
+      onListen: () {
+        listens++;
+        sub = _controller.stream.listen(out.add);
+      },
+      onCancel: () {
+        cancels++;
+        return sub?.cancel();
+      },
+    );
+    return out.stream;
+  }
+
+  @override
+  Future<void> send(String roomId, ReactionType type) async {
+    if (failSends) throw StateError('offline');
+    sent.add(type);
+  }
+}
+
 /// A queue row, upcoming unless [playedAt] is given.
 QueueItem fakeQueueItem({
   String id = 'q1',
@@ -724,6 +918,8 @@ Future<void> pumpApp(
   FakeMusicCatalog? catalog,
   FakeRoomStateRepository? roomState,
   FakeQueueRepository? queue,
+  FakeChatRepository? chat,
+  FakeReactionService? reactions,
   bool debugPanel = true,
   bool soundGate = false,
   bool ready = true,
@@ -748,6 +944,10 @@ Future<void> pumpApp(
         musicCatalogProvider.overrideWithValue(catalog ?? FakeMusicCatalog()),
         soundGateRequiredProvider.overrideWithValue(soundGate),
         debugPanelDefaultProvider.overrideWithValue(debugPanel),
+        chatRepositoryProvider.overrideWithValue(chat ?? FakeChatRepository()),
+        reactionServiceProvider.overrideWithValue(
+          reactions ?? FakeReactionService(),
+        ),
         queueRepositoryProvider.overrideWithValue(
           queue ?? FakeQueueRepository(),
         ),
