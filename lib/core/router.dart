@@ -10,6 +10,7 @@ import '../features/auth/presentation/login_screen.dart';
 import '../features/rooms/presentation/home_screen.dart';
 import '../features/rooms/presentation/join_screen.dart';
 import '../features/rooms/presentation/room_screen.dart';
+import 'not_found_screen.dart';
 import 'redirect.dart';
 
 /// Tells the router to re-run its redirect whenever the auth state changes.
@@ -32,6 +33,7 @@ GoRouter createRouter(AuthRepository auth, Listenable refresh) {
   return GoRouter(
     initialLocation: '/login',
     refreshListenable: refresh,
+    errorBuilder: (_, _) => const NotFoundScreen(),
     redirect: (_, state) {
       final signedIn = auth.isSignedIn;
       final target = authRedirect(

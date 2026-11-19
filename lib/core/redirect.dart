@@ -12,12 +12,20 @@ String? safeRedirectTarget(String? from) {
   return _safeTarget.hasMatch(from) ? from : null;
 }
 
+/// The paths the router has routes for. Anything else is shown the friendly
+/// "page not found" screen, signed in or not.
+final _knownPath = RegExp(r'^/(login|home|room/[^/]+|join/[^/]+)$');
+
+bool isKnownPath(String path) => _knownPath.hasMatch(path);
+
 /// The auth redirect rule for go_router.
 ///
 ///  * Signed out on a protected path: go to `/login`. A deep link opened while
 ///    signed out is kept as `?from=` (when it is a safe target). After an
 ///    explicit sign-out ([wasSignedIn]) it is not kept, so the next person to
 ///    sign in on this device is not sent to the previous person's room.
+///  * An unknown path is never redirected: it shows the not-found screen (it
+///    holds no data, so there is nothing to protect).
 ///  * Signed in on `/login`: go to `from` if safe, else `/home`.
 ///
 /// The two rules never apply to the same location, so they cannot loop.
@@ -27,6 +35,7 @@ String? authRedirect({
   bool wasSignedIn = false,
 }) {
   final onLogin = uri.path == '/login';
+  if (!isKnownPath(uri.path)) return null;
   if (!signedIn) {
     if (onLogin) return null;
     final from = '${uri.path}${uri.hasQuery ? '?${uri.query}' : ''}';

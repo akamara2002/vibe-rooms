@@ -133,15 +133,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Center(
-                      child: Container(
-                        width: 96,
-                        height: 96,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: scheme.primary.withValues(alpha: 0.16),
+                      // The app icon itself, so the login screen and the launcher
+                      // icon agree. Decorative: the title below names the app.
+                      child: ExcludeSemantics(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(22),
+                          child: Image.asset(
+                            'assets/icon/mark.png',
+                            width: 96,
+                            height: 96,
+                            filterQuality: FilterQuality.medium,
+                          ),
                         ),
-                        child: const Text('🎧', style: TextStyle(fontSize: 48)),
                       ),
                     ),
                     const SizedBox(height: 16),

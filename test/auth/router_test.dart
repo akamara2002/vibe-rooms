@@ -20,9 +20,16 @@ void main() {
 
     test('signed out: protected paths go to /login, /login stays', () {
       expect(redirect('/home'), '/login');
-      expect(redirect('/nowhere'), '/login');
       expect(redirect('/login'), isNull);
       expect(redirect('/login?from=%2Froom%2Fabc'), isNull);
+    });
+
+    test('an unknown path is not redirected, signed in or out', () {
+      for (final path in ['/nowhere', '/room/', '/room/a/b', '/', '/x/home']) {
+        expect(redirect(path), isNull, reason: path);
+        expect(redirect(path, signedIn: true), isNull, reason: path);
+        expect(redirect(path, was: true), isNull, reason: path);
+      }
     });
 
     test('signed out: a safe deep link is kept as ?from=', () {
@@ -147,6 +154,37 @@ void main() {
     auth.setSignedIn(false);
     await tester.pumpAndSettle();
     expect(find.text('Continue as guest'), findsOneWidget);
+  });
+
+  group('unknown paths', () {
+    Future<void> goTo(WidgetTester tester, String location) async {
+      GoRouter.of(tester.element(find.byType(Scaffold).first)).go(location);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('signed out: a friendly page, and Go home reaches login', (
+      tester,
+    ) async {
+      await pumpApp(tester, auth: FakeAuthRepository());
+      await goTo(tester, '/nope');
+      expect(find.text('We could not find that page'), findsOneWidget);
+
+      await tester.tap(find.text('Go home'));
+      await tester.pumpAndSettle();
+      expect(find.text('Continue as guest'), findsOneWidget); // no loop
+    });
+
+    testWidgets('signed in: a friendly page, and Go home reaches home', (
+      tester,
+    ) async {
+      await pumpApp(tester, auth: FakeAuthRepository(signedIn: true));
+      await goTo(tester, '/nope/deeper');
+      expect(find.text('We could not find that page'), findsOneWidget);
+
+      await tester.tap(find.text('Go home'));
+      await tester.pumpAndSettle();
+      expect(find.text('Create a room'), findsOneWidget);
+    });
   });
 
   group('deep links through login', () {

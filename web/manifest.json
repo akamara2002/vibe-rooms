@@ -1,11 +1,11 @@
 {
-    "name": "vibe_rooms",
-    "short_name": "vibe_rooms",
+    "name": "Vibe Rooms",
+    "short_name": "Vibe Rooms",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#130B2B",
+    "theme_color": "#2B1B5A",
+    "description": "Listen to the same music, in sync, with your friends: shared queue, live chat and reactions.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
